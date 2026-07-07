@@ -198,7 +198,7 @@ pipelines:
           sensor_topic: /livox/lidar_lf
           localization_source: localization
           pose_wait_timeout_ms: 100
-          required: false
+          required: true
       - node_id: front_left_to_base
         type: pointcloud_transform
         inputs:
@@ -207,7 +207,7 @@ pipelines:
           pointcloud: front_left_base
         config:
           sensor_topic: /livox/lidar_lf
-          required: false
+          required: true
       - node_id: front_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -219,7 +219,7 @@ pipelines:
           sensor_topic: /livox/lidar_rf
           localization_source: localization
           pose_wait_timeout_ms: 100
-          required: false
+          required: true
       - node_id: front_right_to_base
         type: pointcloud_transform
         inputs:
@@ -228,7 +228,7 @@ pipelines:
           pointcloud: front_right_base
         config:
           sensor_topic: /livox/lidar_rf
-          required: false
+          required: true
       - node_id: rear_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -240,7 +240,7 @@ pipelines:
           sensor_topic: /livox/lidar_lb
           localization_source: localization
           pose_wait_timeout_ms: 100
-          required: false
+          required: true
       - node_id: rear_left_to_base
         type: pointcloud_transform
         inputs:
@@ -249,7 +249,7 @@ pipelines:
           pointcloud: rear_left_base
         config:
           sensor_topic: /livox/lidar_lb
-          required: false
+          required: true
       - node_id: rear_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -261,7 +261,7 @@ pipelines:
           sensor_topic: /livox/lidar_rb
           localization_source: localization
           pose_wait_timeout_ms: 100
-          required: false
+          required: true
       - node_id: rear_right_to_base
         type: pointcloud_transform
         inputs:
@@ -270,7 +270,7 @@ pipelines:
           pointcloud: rear_right_base
         config:
           sensor_topic: /livox/lidar_rb
-          required: false
+          required: true
       - node_id: aggregate_pointclouds
         type: aggregate_pointclouds
         outputs:
