@@ -460,11 +460,11 @@ pipelines:
 MainFrameEventQueue 满时：
 
 ```text
-1. 丢弃新的主帧事件。
+1. 丢弃队列中最旧的主帧事件，并写入新的主帧事件。
 2. 不阻塞 ROS callback。
 3. 记录 warning。
 4. main_frame_events_dropped += 1。
-5. drop_reason = main_frame_queue_full。
+5. drop_reason = main_frame_queue_drop_oldest。
 ```
 
 样本级 DAG 含义：

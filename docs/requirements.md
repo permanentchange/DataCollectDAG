@@ -419,11 +419,11 @@ DAG 应保留显式 start 节点和 end 节点。
 
 MainFrameEventQueue 满时：
 
-1. 丢弃新的主帧事件。
+1. 丢弃队列中最旧的主帧事件，并写入新的主帧事件。
 2. 不阻塞 ROS callback。
 3. 记录 warning。
 4. main_frame_events_dropped 加一。
-5. drop_reason 记录为 main_frame_queue_full。
+5. drop_reason 记录为 main_frame_queue_drop_oldest。
 
 ---
 
@@ -1023,7 +1023,7 @@ C++ 节点接入
 支持真实 rosbag 示例中的 5 路相机、5 路点云、IMU、NMEA、odom
 支持按 topic_key 建立 session 级 ring buffer
 支持主帧触发样本级 DAG
-支持主帧队列满时丢弃新主帧并记录 warning
+支持主帧队列满时丢弃旧主帧并写入新主帧，同时记录 warning
 支持样本内并发 DAG
 支持显式 edges 定义 DAG 流程
 支持单入口、单出口、无环处理图
