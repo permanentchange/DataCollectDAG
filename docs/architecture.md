@@ -289,8 +289,8 @@ session_root 创建失败时，当前 session FAILED，并通过日志和 status
 6. 通知 sample workers 不再取新事件。
 7. 通知正在执行的 sample 协作式取消。
 8. 等待运行中的 sample / node 协作式退出。
-9. 如果等待超过 stop_timeout_sec，记录 warning。
-10. 调用 node.teardown()。
+9. 如果等待超过 stop_timeout_sec，记录 warning，并继续等待安全退出。
+10. 所有 worker 安全退出后，调用 node.teardown()。
 11. 写 session_summary.json。
 12. 释放 SessionInputCache。
 13. 释放 worker pool。
@@ -298,7 +298,7 @@ session_root 创建失败时，当前 session FAILED，并通过日志和 status
 15. 工具状态回到 IDLE。
 ```
 
-stop_timeout_sec 是协作式取消等待告警阈值，不用于强杀线程。
+stop_timeout_sec 是协作式取消等待告警阈值，不用于强杀线程，也不用于释放仍被运行节点使用的资源。
 
 ### 6.4 replace 流程
 
