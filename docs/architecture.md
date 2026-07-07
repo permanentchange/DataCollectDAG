@@ -35,7 +35,7 @@
 2. ROS callback 只做轻量接收、包装、缓存和主帧事件投递。
 3. 耗时处理必须放在 DAG 节点中执行。
 4. 缓存是 session 级，IDLE 状态不缓存数据。
-5. 当前 session 不使用 start 前的数据。
+5. 当前 session 只接收 session start 后到达的数据。
 6. DAG 内部使用工具内部数据对象，不直接依赖 ROS message 类型。
 7. 一个主帧事件对应一个 SampleContext。
 8. 样本数据可在 DAG 执行过程中逐步补齐。
@@ -171,7 +171,7 @@ flowchart TD
 
     SyncTopLidar -->|top_lidar| Context1[SampleContext]
     SyncCornerLidars -->|四角 lidar| Context1
-    SyncFisheyeImages -->|鱼眼图像| Context1
+    SyncFisheyeImages -->|四路鱼眼图像| Context1
     SyncOdom -->|odom 可选| Context1
 
     Context1 --> FilterNode[filter / quality check]
@@ -263,9 +263,9 @@ FAILED
 9. 创建 SampleWorkers。
 10. 创建 NodeWorkerPool。
 11. 创建 nodes。
-12. 调用 node.setup()。
+12. 按配置顺序调用 node.setup()。
 13. setup 失败：
-    - teardown 已 setup 成功的节点。
+    - 已 setup 成功的节点按逆序 teardown。
     - 写 session_summary.json。
     - 最近 session 状态为 FAILED。
     - 不进入 RUNNING。
@@ -299,6 +299,8 @@ session_root 创建失败时，当前 session FAILED，并通过日志和 status
 ```
 
 stop_timeout_sec 是协作式取消等待告警阈值，不用于强杀线程，也不用于释放仍被运行节点使用的资源。
+
+节点不得执行不可取消的无限等待。所有 wait 操作必须有超时时间。长耗时节点必须定期检查取消信号。
 
 ### 6.4 replace 流程
 
@@ -363,11 +365,59 @@ ros:
       role: image
       sensor_name: front_wide_camera
 
+    front_fisheye_camera:
+      topic: /camera/front_fisheye/image/compressed
+      msg_type: sensor_msgs/CompressedImage
+      role: image
+      sensor_name: front_fisheye_camera
+
+    rear_fisheye_camera:
+      topic: /camera/rear_fisheye/image/compressed
+      msg_type: sensor_msgs/CompressedImage
+      role: image
+      sensor_name: rear_fisheye_camera
+
+    left_fisheye_camera:
+      topic: /camera/left_fisheye/image/compressed
+      msg_type: sensor_msgs/CompressedImage
+      role: image
+      sensor_name: left_fisheye_camera
+
+    right_fisheye_camera:
+      topic: /camera/right_fisheye/image/compressed
+      msg_type: sensor_msgs/CompressedImage
+      role: image
+      sensor_name: right_fisheye_camera
+
     top_lidar:
       topic: /lidar/top/points
       msg_type: sensor_msgs/PointCloud2
       role: pointcloud
       sensor_name: top_lidar
+
+    front_left_lidar:
+      topic: /lidar/front_left/points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: front_left_lidar
+
+    front_right_lidar:
+      topic: /lidar/front_right/points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: front_right_lidar
+
+    rear_left_lidar:
+      topic: /lidar/rear_left/points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: rear_left_lidar
+
+    rear_right_lidar:
+      topic: /lidar/rear_right/points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: rear_right_lidar
 
     odom:
       topic: /odom
@@ -391,13 +441,13 @@ ros:
 
 1. IDLE 状态不缓存数据。
 2. RUNNING 状态只缓存当前 session 数据。
-3. 数据进入 session cache 必须满足：
-   - receive_timestamp >= session_start_time。
-   - source_timestamp 不存在，或 source_timestamp >= session_start_time。
-4. stop / replace 后立即停止写入当前 session cache。
-5. session 结束后释放 cache。
+3. 数据进入 session cache 必须满足 receive_timestamp >= session_start_time。
+4. receive_timestamp 和 session_start_time 均使用工具所在机器的系统时间。
+5. source_timestamp 可用于同步匹配，不用于判断数据是否属于当前 session。
+6. stop / replace 后立即停止写入当前 session cache。
+7. session 结束后释放 cache。
 
-不满足时间边界的数据丢弃，drop_reason 为 before_session_start。
+不满足 receive 时间边界的数据丢弃，drop_reason 为 before_session_start。
 
 ### 8.2 缓存配置
 
@@ -423,6 +473,10 @@ cache:
   topic_overrides:
     top_lidar:
       max_frames: 10
+      max_age_sec: 1.0
+
+    front_wide_camera:
+      max_frames: 8
       max_age_sec: 1.0
 ```
 
@@ -466,6 +520,16 @@ pipelines:
 3. SampleWorker 取出 MainFrameEvent。
 4. 创建 SampleContext。
 5. 执行样本级 DAG。
+```
+
+MainFrameEventQueue 满时：
+
+```text
+1. 丢弃新的主帧事件。
+2. 不阻塞 ROS callback。
+3. 记录 warning。
+4. main_frame_events_dropped += 1。
+5. drop_reason = main_frame_queue_full。
 ```
 
 样本级 DAG 含义：
@@ -513,6 +577,13 @@ end_node
 6. 所有节点从 start 可达。
 7. 所有节点可到达 end。
 
+配置校验分为两类：
+
+```text
+工具启动时：校验 YAML 结构、ROS topic、cache 配置、pipeline 图结构。
+session start 时：校验 session_root、节点资源、保存节点初始化、模型或参数文件。
+```
+
 ### 10.2 Ready Queue 调度
 
 ```text
@@ -542,6 +613,8 @@ FAIL_SAMPLE：当前样本失败，session 继续。
 FAIL_SESSION：当前 session 失败。
 CANCEL_SESSION：当前 session 或 sample 被取消。
 ```
+
+节点主动返回 NodeResult 时，DagExecutor 直接使用该结果。节点抛异常时，DagExecutor 根据 on_error 策略转换为 NodeResult。
 
 ### 10.4 非 OK 处理
 
@@ -727,10 +800,12 @@ context.data = {
 
 1. key 只有一个 producer 时，可不指定 producer。
 2. key 有多个 producer 时，必须指定 producer。
-3. context 只保存引用，不复制大对象。
-4. SampleContext 的锁只保护 data / metadata 容器结构，不保护 value 对象内部状态。
-5. 节点写入 context 后，不应原地修改已写入的大对象。
-6. producer 用于消除歧义，不鼓励滥用。
+3. key 有多个 producer 且未指定 producer 时，返回 ambiguous 错误。
+4. key 不存在时，返回 missing 错误。
+5. context 只保存引用，不复制大对象。
+6. SampleContext 的锁只保护 data / metadata 容器结构，不保护 value 对象内部状态。
+7. 节点写入 context 后，不应原地修改已写入的大对象。
+8. producer 用于消除歧义，不鼓励滥用。
 
 ---
 
@@ -800,7 +875,16 @@ session 清理阶段执行。
 用于释放资源、关闭句柄、清理临时文件。
 ```
 
-### 12.3 required / optional
+### 12.3 inputs / outputs
+
+配置中 inputs / outputs 使用 context key 映射：
+
+```text
+inputs 左侧为节点内部输入名，右侧为 context key。
+outputs 左侧为节点内部输出名，右侧为 context key。
+```
+
+### 12.4 required / optional
 
 框架负责：
 
@@ -851,8 +935,10 @@ SaveNode 是保存能力扩展点。rosbag 保存未来可作为一种 SaveNode 
 1. 保存节点直接写正式输出目录。
 2. 不保证样本级原子提交。
 3. 不强制清理保存过程中残留的未完成文件。
-4. samples_saved 只统计保存节点明确返回 OK 的样本。
-5. 下游判断有效样本时，应依据保存节点 metadata、索引或 session_summary.json，而不是仅扫描文件是否存在。
+4. 保存节点返回 OK 前，不应设置 save_result.saved=true。
+5. DagExecutor 只在 end node 到达后统计 samples_saved。
+6. samples_saved 只统计 save_result.saved=true 的样本。
+7. 下游判断有效样本时，应依据保存节点 metadata、索引或 session_summary.json，而不是仅扫描文件是否存在。
 
 保存成功后写入：
 
@@ -871,6 +957,10 @@ sample.metadata["save_result"] = {
   type: xtreme1_structured_save
   inputs:
     image_front: front_wide_camera
+    image_fisheye_front: front_fisheye_camera
+    image_fisheye_rear: rear_fisheye_camera
+    image_fisheye_left: left_fisheye_camera
+    image_fisheye_right: right_fisheye_camera
     top_lidar: top_lidar
     front_left_lidar: front_left_lidar
     front_right_lidar: front_right_lidar
@@ -883,6 +973,10 @@ sample.metadata["save_result"] = {
       - image_front
       - top_lidar
     optional_inputs:
+      - image_fisheye_front
+      - image_fisheye_rear
+      - image_fisheye_left
+      - image_fisheye_right
       - front_left_lidar
       - front_right_lidar
       - rear_left_lidar
@@ -961,42 +1055,42 @@ session_summary.json 由框架统一写入 session_root。
   "config_path": "config.yaml",
   "session_root": "/data/output/20260707_001_abcd",
   "pipeline_params": {},
-
   "metrics": {
-    "received_messages": {
-      "front_wide_camera": 1200,
-      "top_lidar": 1200
-    },
+    "received_messages": {},
     "cache_dropped_messages": {},
-    "main_frame_events": 1200,
+    "main_frame_events": 0,
     "main_frame_events_dropped": 0,
-    "samples_started": 1200,
-    "samples_saved": 800,
-    "samples_skipped": 390,
-    "samples_failed": 10,
+    "samples_started": 0,
+    "samples_saved": 0,
+    "samples_skipped": 0,
+    "samples_failed": 0,
     "samples_canceled": 0,
-    "warnings": 3,
-    "errors": 10,
+    "warnings": 0,
+    "errors": 0,
     "drop_reasons": {},
-    "skip_reasons": {
-      "required_input_missing:top_lidar": 200,
-      "filter_rejected": 190
-    },
-    "fail_reasons": {
-      "image_decode_failed": 10
-    }
+    "skip_reasons": {},
+    "fail_reasons": {}
   },
-
-  "save_outputs": [
-    {
-      "node_id": "save_xtreme1",
-      "type": "xtreme1_structured_save",
-      "output_path": "/data/output/20260707_001_abcd/xtreme1"
-    }
-  ],
-
+  "save_outputs": [],
   "last_error": null,
   "warnings": []
+}
+```
+
+### 14.4 Status Snapshot
+
+StatusManager 对外提供当前状态快照。字段为 session_summary.json 的运行时子集：
+
+```json
+{
+  "tool_state": "RUNNING",
+  "last_session_state": "STOPPED",
+  "session_id": "...",
+  "pipeline_name": "...",
+  "start_time": "...",
+  "session_root": "...",
+  "metrics": {},
+  "last_error": null
 }
 ```
 
@@ -1029,12 +1123,56 @@ ros:
       msg_type: sensor_msgs/CompressedImage
       role: image
       sensor_name: front_wide_camera
-
+    front_fisheye_camera:
+      topic: /camera/front_fisheye/image/compressed
+      msg_type: sensor_msgs/CompressedImage
+      role: image
+      sensor_name: front_fisheye_camera
+    rear_fisheye_camera:
+      topic: /camera/rear_fisheye/image/compressed
+      msg_type: sensor_msgs/CompressedImage
+      role: image
+      sensor_name: rear_fisheye_camera
+    left_fisheye_camera:
+      topic: /camera/left_fisheye/image/compressed
+      msg_type: sensor_msgs/CompressedImage
+      role: image
+      sensor_name: left_fisheye_camera
+    right_fisheye_camera:
+      topic: /camera/right_fisheye/image/compressed
+      msg_type: sensor_msgs/CompressedImage
+      role: image
+      sensor_name: right_fisheye_camera
     top_lidar:
       topic: /lidar/top/points
       msg_type: sensor_msgs/PointCloud2
       role: pointcloud
       sensor_name: top_lidar
+    front_left_lidar:
+      topic: /lidar/front_left/points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: front_left_lidar
+    front_right_lidar:
+      topic: /lidar/front_right/points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: front_right_lidar
+    rear_left_lidar:
+      topic: /lidar/rear_left/points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: rear_left_lidar
+    rear_right_lidar:
+      topic: /lidar/rear_right/points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: rear_right_lidar
+    odom:
+      topic: /odom
+      msg_type: nav_msgs/Odometry
+      role: odometry
+      sensor_name: odom
 
 cache:
   defaults_by_role:
@@ -1044,9 +1182,14 @@ cache:
     image:
       max_frames: 5
       max_age_sec: 1.0
+    odometry:
+      max_frames: 100
+      max_age_sec: 5.0
   topic_overrides:
     top_lidar:
       max_frames: 10
+    front_wide_camera:
+      max_frames: 8
 
 output:
   root_dir: /data/collect_output
@@ -1100,6 +1243,26 @@ pipelines:
           wait_timeout_ms: 100
           required: false
 
+      - node_id: sync_fisheye_images
+        type: multi_time_sync
+        inputs:
+          reference_frame: main_frame
+        outputs:
+          front_fisheye_camera: front_fisheye_camera
+          rear_fisheye_camera: rear_fisheye_camera
+          left_fisheye_camera: left_fisheye_camera
+          right_fisheye_camera: right_fisheye_camera
+        config:
+          sources:
+            - front_fisheye_camera
+            - rear_fisheye_camera
+            - left_fisheye_camera
+            - right_fisheye_camera
+          strategy: nearest
+          max_time_diff_ms: 50
+          wait_timeout_ms: 100
+          required: false
+
       - node_id: sync_odom
         type: time_sync
         inputs:
@@ -1117,6 +1280,10 @@ pipelines:
         type: xtreme1_structured_save
         inputs:
           image_front: front_wide_camera
+          image_fisheye_front: front_fisheye_camera
+          image_fisheye_rear: rear_fisheye_camera
+          image_fisheye_left: left_fisheye_camera
+          image_fisheye_right: right_fisheye_camera
           top_lidar: top_lidar
           front_left_lidar: front_left_lidar
           front_right_lidar: front_right_lidar
@@ -1129,6 +1296,10 @@ pipelines:
             - image_front
             - top_lidar
           optional_inputs:
+            - image_fisheye_front
+            - image_fisheye_rear
+            - image_fisheye_left
+            - image_fisheye_right
             - front_left_lidar
             - front_right_lidar
             - rear_left_lidar
@@ -1141,9 +1312,11 @@ pipelines:
     edges:
       - [start, sync_top_lidar]
       - [start, sync_corner_lidars]
+      - [start, sync_fisheye_images]
       - [start, sync_odom]
       - [sync_top_lidar, save_xtreme1]
       - [sync_corner_lidars, save_xtreme1]
+      - [sync_fisheye_images, save_xtreme1]
       - [sync_odom, save_xtreme1]
       - [save_xtreme1, end]
 ```
@@ -1200,6 +1373,8 @@ fail_sample
 fail_session
 ```
 
+on_error 仅用于节点抛异常时的转换。ignore 表示记录 warning 并按 OK 处理。
+
 ### 16.3 协作式取消
 
 取消信号：
@@ -1219,7 +1394,7 @@ sample_cancel_event：
 3. 模型推理前。
 4. 大文件写入前。
 5. 长循环内部。
-6. 保存提交前。
+6. 保存关键步骤前。
 
 ---
 
@@ -1302,10 +1477,11 @@ MVP 包含：
 21. MultiTimeSyncNode。
 22. xtreme1_structured_save 示例保存节点。
 23. session_summary.json。
-24. drop / skip / fail 原因统计。
-25. 协作式取消。
-26. stop / replace 清理流程。
-27. 长期运行基本可观测性。
+24. Status Snapshot。
+25. drop / skip / fail 原因统计。
+26. 协作式取消。
+27. stop / replace 清理流程。
+28. 长期运行基本可观测性。
 
 MVP 不包含：
 
