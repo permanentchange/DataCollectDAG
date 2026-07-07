@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import math
-from typing import Sequence, Tuple
+from typing import Sequence
 
 import numpy as np
 
@@ -91,24 +90,45 @@ def slerp_quaternion_xyzw(q0: np.ndarray, q1: np.ndarray, t: np.ndarray) -> np.n
     q0n = np.asarray(q0, dtype=np.float64)
     q1n = np.asarray(q1, dtype=np.float64)
     tt = np.asarray(t, dtype=np.float64)
+    if tt.ndim == 0:
+        tt = tt.reshape(1)
     if q0n.ndim == 1:
         q0n = np.broadcast_to(q0n, (tt.shape[0], 4))
     if q1n.ndim == 1:
         q1n = np.broadcast_to(q1n, (tt.shape[0], 4))
-    result = np.empty_like(q0n)
-    for idx, factor in enumerate(tt):
-        qa = normalize_quaternion_xyzw(q0n[idx])
-        qb = normalize_quaternion_xyzw(q1n[idx])
-        dot = float(np.dot(qa, qb))
-        if dot < 0.0:
-            qb = -qb
-            dot = -dot
-        dot = min(1.0, max(-1.0, dot))
-        if dot > 0.9995:
-            result[idx] = normalize_quaternion_xyzw(qa + factor * (qb - qa))
-            continue
-        theta_0 = math.acos(dot)
-        theta = theta_0 * factor
-        q2 = normalize_quaternion_xyzw(qb - qa * dot)
-        result[idx] = qa * math.cos(theta) + q2 * math.sin(theta)
+    if q0n.shape != q1n.shape or q0n.ndim != 2 or q0n.shape[1] != 4:
+        raise ValueError("q0 and q1 must broadcast to Nx4 quaternions")
+    if q0n.shape[0] != tt.shape[0]:
+        raise ValueError("t must have one interpolation factor per quaternion")
+
+    qa = _normalize_quaternion_rows(q0n)
+    qb = _normalize_quaternion_rows(q1n)
+    dot = np.sum(qa * qb, axis=1)
+    opposite = dot < 0.0
+    qb = qb.copy()
+    qb[opposite] = -qb[opposite]
+    dot = np.abs(dot)
+    dot = np.clip(dot, -1.0, 1.0)
+
+    result = np.empty_like(qa)
+    linear = dot > 0.9995
+    if np.any(linear):
+        result[linear] = _normalize_quaternion_rows(
+            qa[linear] + tt[linear, None] * (qb[linear] - qa[linear])
+        )
+
+    spherical = ~linear
+    if np.any(spherical):
+        theta_0 = np.arccos(dot[spherical])
+        theta = theta_0 * tt[spherical]
+        q2 = _normalize_quaternion_rows(qb[spherical] - qa[spherical] * dot[spherical, None])
+        result[spherical] = qa[spherical] * np.cos(theta)[:, None] + q2 * np.sin(theta)[:, None]
     return result
+
+
+def _normalize_quaternion_rows(quaternions_xyzw: np.ndarray) -> np.ndarray:
+    quats = np.asarray(quaternions_xyzw, dtype=np.float64)
+    norms = np.linalg.norm(quats, axis=1, keepdims=True)
+    if np.any(norms == 0.0):
+        raise ValueError("quaternion norm must be positive")
+    return quats / norms

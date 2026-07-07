@@ -82,8 +82,8 @@ ros:
 cache:
   defaults_by_role:
     image:
-      max_frames: 3
-      max_age_sec: 0.3
+      max_frames: 10
+      max_age_sec: 1.0
     pointcloud:
       max_frames: 10
       max_age_sec: 1.0
@@ -101,8 +101,8 @@ cache:
       max_age_sec: 1.0
   topic_overrides:
     front_wide_camera:
-      max_frames: 2
-      max_age_sec: 0.2
+      max_frames: 5
+      max_age_sec: 1.0
 runtime:
   debug: true
   sample_workers: 1
@@ -164,7 +164,7 @@ pipelines:
             - right_fisheye_camera
           strategy: nearest
           max_time_diff_ms: 10
-          wait_timeout_ms: 20
+          wait_timeout_ms: 150
           required: true
       - node_id: top_lidar_motion
         type: pointcloud_motion_compensation
