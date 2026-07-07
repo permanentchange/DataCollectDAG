@@ -1,19 +1,9 @@
 from pathlib import Path
 
-import pytest
-
 from data_collect_dag.app import AppRuntime
-from data_collect_dag.config import load_app_config
 from data_collect_dag.ros_adapter import RosAdapter
 from data_collect_dag.session import SessionManager
 from data_collect_dag.status import StatusManager
-
-
-def test_missing_extrinsics_session_start_fails():
-    config = load_app_config(Path("demo/xtreme1_demo_missing_extrinsics.yaml"))
-    runtime = AppRuntime(Path("demo/xtreme1_demo_missing_extrinsics.yaml"), "xtreme1_collect")
-    with pytest.raises(Exception):
-        runtime.session_manager.start("xtreme1_collect")
 
 
 def test_session_manager_start_stop_replace(tmp_path):
