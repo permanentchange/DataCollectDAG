@@ -1121,6 +1121,8 @@ pipelines:
 
 `/chcnav/nmea_sentence` 的 `msg_type` 应按实际 ROS topic 类型填写。若实车使用自定义 NMEA message，应保持 topic_key 不变，并调整对应 message wrapper。
 
+当 `msg_type` 使用 `bdstar/string`、`igv_msgs/location` 等自定义 ROS message 时，运行机器必须先让对应 ROS package 出现在当前环境中，再启动本工具。推荐在运行前先 `source <catkin_ws>/devel/setup.bash` 或 `source <catkin_ws>/install/setup.bash`，否则启动阶段应直接报错并拒绝进入部分订阅状态。
+
 ---
 
 ## 16. 异常处理与取消机制

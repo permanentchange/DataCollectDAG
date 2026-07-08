@@ -62,9 +62,10 @@ class RosAdapter:
         if not rospy.core.is_initialized():
             rospy.init_node(self._ros_node_name, anonymous=False, disable_signals=True)
         self._logger.info("starting ROS adapter node=%s subscribed_topics=%s", self._ros_node_name, sorted(self._topics))
+        resolved_message_classes = self._resolve_topic_message_classes()
         self._subscribers = []
         for topic_key, topic_config in self._topics.items():
-            msg_class = resolve_message_class(topic_config.msg_type)
+            msg_class = resolved_message_classes[topic_key]
             subscriber = rospy.Subscriber(topic_config.topic, msg_class, self._make_topic_callback(topic_key, topic_config), queue_size=50)
             self._subscribers.append(subscriber)
         StringMsg = import_std_msgs_string()
@@ -120,6 +121,26 @@ class RosAdapter:
         if self._status_callback is None:
             return "{}"
         return json.dumps(self._status_callback().to_dict(), ensure_ascii=False)
+
+    def _resolve_topic_message_classes(self) -> Dict[str, Any]:
+        resolved: Dict[str, Any] = {}
+        failures = []
+        for topic_key, topic_config in self._topics.items():
+            try:
+                resolved[topic_key] = resolve_message_class(topic_config.msg_type)
+            except Exception as exc:
+                failures.append(
+                    f"- topic_key={topic_key} ros_topic={topic_config.topic} msg_type={topic_config.msg_type}: {exc}"
+                )
+        if failures:
+            raise RuntimeError(
+                "failed to resolve ROS message types before starting subscriptions:\n"
+                + "\n".join(failures)
+                + "\nEnsure required ROS packages are installed/built and source your workspace before running, for example:\n"
+                + "  source /path/to/catkin_ws/devel/setup.bash\n"
+                + "  source /path/to/catkin_ws/install/setup.bash"
+            )
+        return resolved
 
     def ingest_frame(self, topic_key: str, frame: FrameLike) -> None:
         session = self._session

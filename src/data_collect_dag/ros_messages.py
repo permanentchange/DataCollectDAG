@@ -17,7 +17,7 @@ from data_collect_dag.models import (
     PointCloudFrame,
     TextFrame,
 )
-from data_collect_dag.ros_env import CUSTOM_MSG_ROOTS, STANDARD_MSG_ROOT, ensure_ros_python_path
+from data_collect_dag.ros_env import ensure_ros_python_path, resolve_message_definition_path
 from data_collect_dag.transforms import normalize_quaternion_xyzw
 
 
@@ -166,13 +166,7 @@ def _normalize_field_type(field_type: str, current_package: str) -> Optional[str
 
 
 def _read_msg_text(msg_type: str) -> str:
-    package, name = msg_type.split("/", 1)
-    if package in CUSTOM_MSG_ROOTS:
-        path = CUSTOM_MSG_ROOTS[package] / f"{name}.msg"
-    else:
-        path = STANDARD_MSG_ROOT / package / "msg" / f"{name}.msg"
-    if not path.exists():
-        raise FileNotFoundError(f"message definition not found for {msg_type}: {path}")
+    path = resolve_message_definition_path(msg_type)
     return path.read_text(encoding="utf-8")
 
 
