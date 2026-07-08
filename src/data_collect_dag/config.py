@@ -14,6 +14,7 @@ from data_collect_dag.models import (
     NodeConfig,
     PipelineDefinition,
     RuntimeConfig,
+    StopConditions,
     TopicConfig,
 )
 
@@ -142,8 +143,22 @@ def _parse_pipelines(raw_pipelines: Dict[str, Any], topics: Dict[str, TopicConfi
             successors={key: list(value) for key, value in successors.items()},
             start_node_id=start_nodes[0],
             end_node_id=end_nodes[0],
+            stop_conditions=_parse_stop_conditions(name, payload.get("stop_conditions") or {}),
         )
     return pipelines
+
+
+def _parse_stop_conditions(pipeline_name: str, payload: Dict[str, Any]) -> StopConditions:
+    stop_conditions = StopConditions()
+    if "max_duration_sec" in payload:
+        stop_conditions.max_duration_sec = float(payload["max_duration_sec"])
+        if stop_conditions.max_duration_sec <= 0:
+            raise ConfigError(f"pipeline {pipeline_name} max_duration_sec must be > 0")
+    if "max_saved_samples" in payload:
+        stop_conditions.max_saved_samples = int(payload["max_saved_samples"])
+        if stop_conditions.max_saved_samples <= 0:
+            raise ConfigError(f"pipeline {pipeline_name} max_saved_samples must be > 0")
+    return stop_conditions
 
 
 def _validate_pipeline_graph(

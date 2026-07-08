@@ -27,6 +27,7 @@ def test_session_manager_start_stop_replace(tmp_path, monkeypatch):
         runtime.calibration,
         RosAdapter(runtime.app_config.topics, runtime.app_config.ros_node_name, runtime.app_config.control),
         StatusManager(),
+        command_callback=lambda command: None,
     )
     session1 = runtime.session_manager.start("xtreme1_collect")
     assert session1.session_root.exists()

@@ -5,9 +5,10 @@ import logging
 import queue
 import threading
 import time
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from data_collect_dag.cache import SessionInputCache
+from data_collect_dag.control import ControlCommand
 from data_collect_dag.dag import DagExecutor
 from data_collect_dag.io_utils import write_json
 from data_collect_dag.logging_utils import attach_session_log_file, configure_logging, detach_handler
@@ -59,12 +60,21 @@ NODE_TYPES = {
 
 
 class SessionRuntime:
-    def __init__(self, app_config: AppConfig, pipeline: PipelineDefinition, calibration: Dict[str, Any], ros_adapter: RosAdapter, status_manager: StatusManager) -> None:
+    def __init__(
+        self,
+        app_config: AppConfig,
+        pipeline: PipelineDefinition,
+        calibration: Dict[str, Any],
+        ros_adapter: RosAdapter,
+        status_manager: StatusManager,
+        command_callback: Callable[[ControlCommand], None],
+    ) -> None:
         self.app_config = app_config
         self.pipeline = pipeline
         self.calibration = calibration
         self.ros_adapter = ros_adapter
         self.status_manager = status_manager
+        self._command_callback = command_callback
         self.session_id = make_session_id()
         self.session_root = app_config.output_root_dir / self.session_id
         self.cache = SessionInputCache(app_config.cache_policies)
@@ -85,6 +95,14 @@ class SessionRuntime:
         self._end_status = RecentSessionStatus.STOPPED
         self._end_reason = "external_stop"
         self._active = False
+        self._paused = False
+        self._accepting_frames = False
+        self._completion_requested = False
+        self._active_elapsed_sec = 0.0
+        self._run_started_monotonic = None
+        self._state_lock = threading.RLock()
+        self._state_condition = threading.Condition(self._state_lock)
+        self._duration_thread = None
         self._log_handler = None
         self.logger = logging.getLogger("data_collect_dag.session")
 
@@ -95,6 +113,8 @@ class SessionRuntime:
         try:
             self._build_nodes()
             self._active = True
+            self._accepting_frames = True
+            self._run_started_monotonic = time.monotonic()
             self.status_manager.set_running(self.session_id, self.pipeline.name, self._start_time)
             self.ros_adapter.bind_session(self)
             self._workers = []
@@ -125,6 +145,13 @@ class SessionRuntime:
                 )
                 worker.start()
                 self._workers.append(worker)
+            if self.pipeline.stop_conditions and self.pipeline.stop_conditions.max_duration_sec is not None:
+                self._duration_thread = threading.Thread(
+                    target=self._duration_monitor_loop,
+                    name=f"duration-monitor-{self.session_id}",
+                    daemon=True,
+                )
+                self._duration_thread.start()
         except Exception as exc:
             self._last_error = str(exc)
             self.logger.exception("session start failed session_id=%s", self.session_id)
@@ -159,6 +186,14 @@ class SessionRuntime:
         self.logger.info("stopping session session_id=%s reason=%s status=%s", self.session_id, reason, status.value)
         self._end_reason = reason
         self._end_status = status
+        with self._state_condition:
+            self._accepting_frames = False
+            self._paused = False
+            self._completion_requested = True
+            if self._run_started_monotonic is not None:
+                self._active_elapsed_sec += max(0.0, time.monotonic() - self._run_started_monotonic)
+                self._run_started_monotonic = None
+            self._state_condition.notify_all()
         self.cancel_event.set()
         self.ros_adapter.unbind_session(self)
         for _ in self._workers:
@@ -169,6 +204,9 @@ class SessionRuntime:
         for worker in self._workers:
             worker.join(timeout=self.app_config.runtime.stop_timeout_sec)
         self._workers = []
+        if self._duration_thread is not None:
+            self._duration_thread.join(timeout=self.app_config.runtime.stop_timeout_sec)
+            self._duration_thread = None
         for node in reversed(list(self._nodes.values())):
             node.teardown()
         if self._node_pool is not None:
@@ -206,8 +244,9 @@ class SessionRuntime:
         self._log_handler = None
 
     def accept_frame(self, topic_key: str, frame: Any) -> None:
-        if not self._active or self.cancel_event.is_set():
-            return
+        with self._state_lock:
+            if not self._active or self.cancel_event.is_set() or not self._accepting_frames or self._paused or self._completion_requested:
+                return
         self.metrics.received_message(topic_key)
         dropped = self.cache.append(topic_key, frame)
         for reason in dropped:
@@ -228,6 +267,8 @@ class SessionRuntime:
                 self.cancel_event.wait(timeout=remaining)
                 if self.cancel_event.is_set():
                     break
+            if not self._wait_until_sample_can_run():
+                break
             self.metrics.sample_started()
             sample = SampleContext(sample_id=str(event.main_frame.meta.source_timestamp_ns), cancel_event=threading.Event())
             sample.put("main_frame", event.main_frame, "main_source")
@@ -242,6 +283,7 @@ class SessionRuntime:
             if sample.metadata.get("save_result", {}).get("saved"):
                 self._append_sample_record(sample)
                 self.metrics.sample_saved()
+                self._check_saved_sample_limit()
             self.metrics.sample_finished(outcome.status, outcome.reason)
             self.status_manager.update_metrics(self.metrics.metrics)
             self.logger.debug(
@@ -252,6 +294,30 @@ class SessionRuntime:
                 outcome.reason,
                 bool(sample.metadata.get("save_result", {}).get("saved")),
             )
+
+    def pause(self) -> None:
+        with self._state_condition:
+            if not self._active or self.cancel_event.is_set() or self._paused or self._completion_requested:
+                return
+            self._paused = True
+            self._accepting_frames = False
+            if self._run_started_monotonic is not None:
+                self._active_elapsed_sec += max(0.0, time.monotonic() - self._run_started_monotonic)
+                self._run_started_monotonic = None
+            self._state_condition.notify_all()
+        self.status_manager.set_paused()
+        self.logger.info("session paused session_id=%s", self.session_id)
+
+    def resume(self) -> None:
+        with self._state_condition:
+            if not self._active or self.cancel_event.is_set() or not self._paused or self._completion_requested:
+                return
+            self._paused = False
+            self._accepting_frames = True
+            self._run_started_monotonic = time.monotonic()
+            self._state_condition.notify_all()
+        self.status_manager.set_resumed()
+        self.logger.info("session resumed session_id=%s", self.session_id)
 
     def _build_nodes(self) -> None:
         self._node_pool = concurrent.futures.ThreadPoolExecutor(max_workers=self.app_config.runtime.node_workers)
@@ -372,13 +438,80 @@ class SessionRuntime:
                 min(image_ages),
             )
 
+    def _wait_until_sample_can_run(self) -> bool:
+        with self._state_condition:
+            while self._paused and not self.cancel_event.is_set() and not self._completion_requested:
+                self._state_condition.wait(timeout=0.2)
+            return not self.cancel_event.is_set() and not self._completion_requested
+
+    def _current_active_elapsed_sec(self) -> float:
+        with self._state_lock:
+            return self._current_active_elapsed_sec_locked()
+
+    def _current_active_elapsed_sec_locked(self) -> float:
+        elapsed = self._active_elapsed_sec
+        if self._run_started_monotonic is not None:
+            elapsed += max(0.0, time.monotonic() - self._run_started_monotonic)
+        return elapsed
+
+    def _duration_monitor_loop(self) -> None:
+        max_duration_sec = self.pipeline.stop_conditions.max_duration_sec if self.pipeline.stop_conditions else None
+        if max_duration_sec is None:
+            return
+        while not self.cancel_event.is_set():
+            with self._state_condition:
+                if self._completion_requested:
+                    return
+                if self._paused:
+                    self._state_condition.wait(timeout=0.2)
+                    continue
+                remaining = max_duration_sec - self._current_active_elapsed_sec_locked()
+                if remaining <= 0:
+                    break
+                self._state_condition.wait(timeout=min(remaining, 0.2))
+        self._request_completion("max_duration_reached")
+
+    def _check_saved_sample_limit(self) -> None:
+        max_saved_samples = self.pipeline.stop_conditions.max_saved_samples if self.pipeline.stop_conditions else None
+        if max_saved_samples is None:
+            return
+        if self.metrics.metrics.samples_saved >= max_saved_samples:
+            self._request_completion("max_saved_samples_reached")
+
+    def _request_completion(self, reason: str) -> None:
+        with self._state_condition:
+            if self._completion_requested or self.cancel_event.is_set():
+                return
+            self._completion_requested = True
+            self._accepting_frames = False
+            if self._run_started_monotonic is not None:
+                self._active_elapsed_sec += max(0.0, time.monotonic() - self._run_started_monotonic)
+                self._run_started_monotonic = None
+            self._state_condition.notify_all()
+        self._command_callback(
+            ControlCommand(
+                kind="complete",
+                session_id=self.session_id,
+                reason=reason,
+                end_status=RecentSessionStatus.COMPLETED.value,
+            )
+        )
+
 
 class SessionManager:
-    def __init__(self, app_config: AppConfig, calibration: Dict[str, Any], ros_adapter: RosAdapter, status_manager: StatusManager) -> None:
+    def __init__(
+        self,
+        app_config: AppConfig,
+        calibration: Dict[str, Any],
+        ros_adapter: RosAdapter,
+        status_manager: StatusManager,
+        command_callback: Callable[[ControlCommand], None],
+    ) -> None:
         self.app_config = app_config
         self.calibration = calibration
         self.ros_adapter = ros_adapter
         self.status_manager = status_manager
+        self.command_callback = command_callback
         self.active_session: SessionRuntime = None
         self.logger = logging.getLogger("data_collect_dag.session_manager")
 
@@ -394,6 +527,7 @@ class SessionManager:
             calibration=self.calibration,
             ros_adapter=self.ros_adapter,
             status_manager=self.status_manager,
+            command_callback=self.command_callback,
         )
         session.start()
         self.active_session = session
@@ -405,3 +539,13 @@ class SessionManager:
         self.logger.info("stopping active session reason=%s status=%s", reason, status.value)
         self.active_session.stop(reason=reason, status=status)
         self.active_session = None
+
+    def pause(self) -> None:
+        if self.active_session is None:
+            return
+        self.active_session.pause()
+
+    def resume(self) -> None:
+        if self.active_session is None:
+            return
+        self.active_session.resume()

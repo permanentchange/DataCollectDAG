@@ -23,6 +23,7 @@ def make_session_id() -> str:
 class ToolState(str, enum.Enum):
     IDLE = "IDLE"
     RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
 
 
 class RecentSessionStatus(str, enum.Enum):
@@ -186,6 +187,13 @@ class PipelineDefinition:
     successors: Dict[str, List[str]]
     start_node_id: str
     end_node_id: str
+    stop_conditions: "StopConditions" = None
+
+
+@dataclass
+class StopConditions:
+    max_duration_sec: Optional[float] = None
+    max_saved_samples: Optional[int] = None
 
 
 @dataclass
@@ -202,6 +210,8 @@ class RuntimeConfig:
 class ControlConfig:
     start_topic: Optional[str] = None
     stop_topic: Optional[str] = None
+    pause_topic: Optional[str] = None
+    resume_topic: Optional[str] = None
     status_topic: Optional[str] = None
     start_service: Optional[str] = None
     stop_service: Optional[str] = None

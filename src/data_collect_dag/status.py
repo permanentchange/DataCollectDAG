@@ -18,6 +18,14 @@ class StatusManager:
             self._snapshot.current_pipeline_name = pipeline_name
             self._snapshot.start_time = start_time
 
+    def set_paused(self) -> None:
+        with self._lock:
+            self._snapshot.tool_state = ToolState.PAUSED
+
+    def set_resumed(self) -> None:
+        with self._lock:
+            self._snapshot.tool_state = ToolState.RUNNING
+
     def set_idle(self, recent_status: RecentSessionStatus) -> None:
         with self._lock:
             self._snapshot.tool_state = ToolState.IDLE
@@ -47,4 +55,3 @@ class StatusManager:
             cloned = StatusSnapshot()
             cloned.__dict__.update(self._snapshot.__dict__)
             return cloned
-

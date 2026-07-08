@@ -24,6 +24,8 @@ class RosAdapter:
         self._status_callback: Optional[Callable[[], StatusSnapshot]] = None
         self._start_callback: Optional[Callable[[str], None]] = None
         self._stop_callback: Optional[Callable[[], None]] = None
+        self._pause_callback: Optional[Callable[[], None]] = None
+        self._resume_callback: Optional[Callable[[], None]] = None
         self._status_thread: Optional[threading.Thread] = None
         self._status_stop = threading.Event()
         self._subscribers = []
@@ -38,10 +40,14 @@ class RosAdapter:
         status_callback: Callable[[], StatusSnapshot],
         start_callback: Callable[[str], None],
         stop_callback: Callable[[], None],
+        pause_callback: Callable[[], None],
+        resume_callback: Callable[[], None],
     ) -> None:
         self._status_callback = status_callback
         self._start_callback = start_callback
         self._stop_callback = stop_callback
+        self._pause_callback = pause_callback
+        self._resume_callback = resume_callback
 
     def bind_session(self, session: Any) -> None:
         self._session = session
@@ -66,6 +72,10 @@ class RosAdapter:
             self._subscribers.append(rospy.Subscriber(self._control.start_topic, StringMsg, self._on_start_topic, queue_size=10))
         if self._control.stop_topic:
             self._subscribers.append(rospy.Subscriber(self._control.stop_topic, StringMsg, self._on_stop_topic, queue_size=10))
+        if self._control.pause_topic:
+            self._subscribers.append(rospy.Subscriber(self._control.pause_topic, StringMsg, self._on_pause_topic, queue_size=10))
+        if self._control.resume_topic:
+            self._subscribers.append(rospy.Subscriber(self._control.resume_topic, StringMsg, self._on_resume_topic, queue_size=10))
         if self._control.status_topic:
             self._publishers["status_topic"] = rospy.Publisher(self._control.status_topic, StringMsg, queue_size=10, latch=True)
             self._status_stop.clear()
@@ -153,6 +163,14 @@ class RosAdapter:
     def _on_stop_topic(self, msg: Any) -> None:
         if self._stop_callback is not None:
             self._stop_callback()
+
+    def _on_pause_topic(self, msg: Any) -> None:
+        if self._pause_callback is not None:
+            self._pause_callback()
+
+    def _on_resume_topic(self, msg: Any) -> None:
+        if self._resume_callback is not None:
+            self._resume_callback()
 
     def _handle_status_service(self, _request: Any):
         _Trigger, TriggerResponse = import_std_srvs_trigger()

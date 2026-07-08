@@ -7,6 +7,8 @@ ros:
   control:
     start_topic: /data_collect/start
     stop_topic: /data_collect/stop
+    pause_topic: /data_collect/pause
+    resume_topic: /data_collect/resume
     status_topic: /data_collect/status
   topics:
     front_wide_camera:
@@ -113,6 +115,9 @@ runtime:
 pipelines:
   xtreme1_collect:
     main_source: front_wide_camera
+    stop_conditions:
+      max_duration_sec: 600
+      max_saved_samples: 1000
     nodes:
       - node_id: start
         type: start

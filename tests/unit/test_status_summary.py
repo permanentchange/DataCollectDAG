@@ -15,6 +15,10 @@ def test_status_manager_snapshot_updates():
     snapshot = manager.snapshot()
     assert snapshot.current_session_id == "sid"
     assert snapshot.main_frame_events == 3
+    manager.set_paused()
+    assert manager.snapshot().tool_state.value == "PAUSED"
+    manager.set_resumed()
+    assert manager.snapshot().tool_state.value == "RUNNING"
     manager.set_idle(RecentSessionStatus.STOPPED)
     assert manager.snapshot().tool_state.value == "IDLE"
 
@@ -29,8 +33,8 @@ def test_summary_writer_writes_json(tmp_path):
             pipeline_name="p",
             start_time="a",
             end_time="b",
-            end_status="STOPPED",
-            end_reason="external_stop",
+            end_status="COMPLETED",
+            end_reason="max_saved_samples_reached",
             config_path="c",
             session_root="r",
             pipeline_params={},
@@ -42,4 +46,4 @@ def test_summary_writer_writes_json(tmp_path):
     )
     assert path.exists()
     assert '"session_id": "s"' in path.read_text(encoding="utf-8")
-
+    assert '"end_reason": "max_saved_samples_reached"' in path.read_text(encoding="utf-8")

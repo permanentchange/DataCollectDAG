@@ -9,6 +9,9 @@ from typing import Any, Dict, Optional
 class ControlCommand:
     kind: str
     pipeline_name: Optional[str] = None
+    session_id: Optional[str] = None
+    reason: Optional[str] = None
+    end_status: Optional[str] = None
     params: Dict[str, Any] = None
 
     def __post_init__(self) -> None:
@@ -25,4 +28,3 @@ class ControlCommandQueue:
 
     def get(self, timeout: Optional[float] = None) -> ControlCommand:
         return self._queue.get(timeout=timeout)
-
