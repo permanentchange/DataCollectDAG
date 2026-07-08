@@ -1,4 +1,9 @@
 *.bag
+*.pth
+*.pt
+*.onnx
+*.engine
+*.tensorrt
 .goals/
 output/
 __pycache__/

@@ -116,6 +116,18 @@ pipelines:
     nodes:
       - node_id: start
         type: start
+      - node_id: front_person_gate
+        type: yolo_person_gate
+        inputs:
+          image: main_frame
+        config:
+          model_path: demo/models/yolo_person_model.pt
+          class_name: person
+          confidence_threshold: 0.25
+          min_area_ratio: 0.01
+          device: cpu
+          imgsz: 640
+          failure_policy: skip_sample
       - node_id: sync_top_lidar
         type: time_sync
         inputs:
@@ -300,9 +312,10 @@ pipelines:
       - node_id: end
         type: end
     edges:
-      - [start, sync_top_lidar]
-      - [start, sync_corner_lidars]
-      - [start, sync_fisheye_images]
+      - [start, front_person_gate]
+      - [front_person_gate, sync_top_lidar]
+      - [front_person_gate, sync_corner_lidars]
+      - [front_person_gate, sync_fisheye_images]
       - [sync_top_lidar, top_lidar_motion]
       - [top_lidar_motion, top_lidar_to_base]
       - [top_lidar_to_base, aggregate_pointclouds]

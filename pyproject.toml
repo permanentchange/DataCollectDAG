@@ -13,6 +13,7 @@ dependencies = [
   "PyYAML>=6.0",
   "Pillow>=10.0",
   "opencv-python-headless>=4.10",
+  "ultralytics>=8.4,<9",
   "rospkg>=1.6",
   "catkin_pkg>=1.1",
   "pycryptodomex>=3.20",

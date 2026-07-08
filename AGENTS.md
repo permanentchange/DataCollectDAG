@@ -9,6 +9,7 @@ Core package code lives in `src/data_collect_dag/`. Keep runtime orchestration i
 - `conda activate dcd` enters the expected local development and test environment.
 - `conda create -n dcd python=3.8 -y` creates that environment when it does not already exist.
 - `python -m pip install -e .` installs the package in editable mode.
+- `python -m pip install "ultralytics>=8.4,<9"` is only a fallback if `python -m pip install -e .` did not install the declared YOLO dependency in the current environment.
 - `python -m pytest` runs the full test suite.
 - `python -m pytest tests/unit -q` runs fast unit coverage only.
 - `python -m pytest tests/functional -q` runs session/runtime integration checks.
@@ -30,4 +31,4 @@ Recent history uses short conventional prefixes. Preferred examples include `fea
 
 ## Configuration & ROS Notes
 
-Configuration is YAML-driven; use `demo/xtreme1_demo.yaml` as the reference shape for new pipelines. Keep ROS-facing code lightweight and confined to adapter/control modules; heavy processing belongs in DAG nodes.
+Configuration is YAML-driven; use `demo/xtreme1_demo.yaml` as the reference shape for new pipelines. Keep ROS-facing code lightweight and confined to adapter/control modules; heavy processing belongs in DAG nodes. The demo pipeline expects a YOLO weight file at `demo/models/yolo_person_model.pt`; see `demo/models/README.md` for a manual download step before running `demo/xtreme1_demo.yaml`. A local `test_data.bag` ROS bag file is available for testing; use `roscore`, then start `data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect`, and finally run `rosbag play test_data.bag` to simulate a recording scenario when validating ROS-integrated behavior.

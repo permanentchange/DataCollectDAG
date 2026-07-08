@@ -192,6 +192,25 @@ def _validate_node_config(pipeline_name: str, node_config: NodeConfig, topics: D
             raise ConfigError(
                 f"pipeline {pipeline_name} node {node_config.node_id} references unknown localization_source topic_key: {localization_source}"
             )
+    elif node_config.node_type == "yolo_person_gate":
+        model_path = str(node_config.config.get("model_path", "")).strip()
+        if not model_path:
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing model_path")
+        if "image" not in node_config.inputs:
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing image input")
+        if "min_area_ratio" not in node_config.config:
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing min_area_ratio")
+        confidence_threshold = float(node_config.config.get("confidence_threshold", 0.25))
+        min_area_ratio = float(node_config.config["min_area_ratio"])
+        if confidence_threshold < 0.0 or confidence_threshold > 1.0:
+            raise ConfigError(
+                f"pipeline {pipeline_name} node {node_config.node_id} confidence_threshold must be between 0 and 1"
+            )
+        if min_area_ratio < 0.0 or min_area_ratio > 1.0:
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} min_area_ratio must be between 0 and 1")
+        failure_policy = str(node_config.config.get("failure_policy", "skip_sample"))
+        if failure_policy != "skip_sample":
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} unsupported failure_policy: {failure_policy}")
 
 
 def _dfs(root: str, adjacency: Dict[str, List[str]]) -> Set[str]:
