@@ -33,13 +33,19 @@ docs/                       design notes
 
 - Python `3.8`
 - ROS1 Noetic
-- `conda`
+- One Python environment manager:
+  - `conda`, or
+  - the standard library `venv` module
 - ROS message definitions required by your config
 
 The demo config uses custom message types such as `igv_msgs/...` and `bdstar/...`.
 Make sure those message packages are available in your ROS/Python environment before running the demo.
 
 ## Installation
+
+Choose one of the following environment setups.
+
+### Option 1: Install With `conda`
 
 Create and activate the environment:
 
@@ -54,10 +60,40 @@ Install the project:
 python -m pip install -e .
 ```
 
-If you want to verify the YOLO dependency after installation:
+### Option 2: Install With `python -m venv`
+
+Make sure `python3.8` is available on your machine, then create and activate a virtual environment:
 
 ```bash
-python -c "import ultralytics; print(ultralytics.__version__)"
+python3.8 -m venv .venv
+source .venv/bin/activate
+```
+
+Upgrade packaging tools, then install the project:
+
+```bash
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+```
+
+If you are on Windows PowerShell, activate the environment with:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+### Verify The Installation
+
+Check that the package and YOLO dependency import correctly:
+
+```bash
+python -c "import data_collect_dag; import ultralytics; print(ultralytics.__version__)"
+```
+
+If `ultralytics` is still missing after the editable install, install it explicitly:
+
+```bash
+python -m pip install "ultralytics>=8.4,<9"
 ```
 
 ## Demo Setup
@@ -80,7 +116,7 @@ Shell 1:
 
 ```bash
 source /opt/ros/noetic/setup.bash
-conda activate dcd
+conda activate dcd  # or: source .venv/bin/activate
 roscore
 ```
 
@@ -88,7 +124,7 @@ Shell 2:
 
 ```bash
 source /opt/ros/noetic/setup.bash
-conda activate dcd
+conda activate dcd  # or: source .venv/bin/activate
 data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect
 ```
 
@@ -96,7 +132,7 @@ Shell 3:
 
 ```bash
 source /opt/ros/noetic/setup.bash
-conda activate dcd
+conda activate dcd  # or: source .venv/bin/activate
 rosbag play test_data.bag
 ```
 
@@ -137,6 +173,15 @@ python -m pytest tests/unit -q
 python -m pytest tests/functional -q
 ```
 
+If you are using `venv`, activate it first instead:
+
+```bash
+source .venv/bin/activate
+python -m pytest
+python -m pytest tests/unit -q
+python -m pytest tests/functional -q
+```
+
 ## Common Issues
 
 ### `missing yolo model_path`
@@ -155,6 +200,13 @@ If needed, install the dependency directly:
 
 ```bash
 python -m pip install "ultralytics>=8.4,<9"
+```
+
+If you are using `venv`, confirm the environment is active before reinstalling:
+
+```bash
+source .venv/bin/activate
+python -m pip install -e .
 ```
 
 ### ROS message resolution errors
