@@ -4,6 +4,7 @@
 *.onnx
 *.engine
 *.tensorrt
+*.log
 .goals/
 output/
 __pycache__/

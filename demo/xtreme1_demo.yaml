@@ -1,5 +1,5 @@
 output:
-  root_dir: /home/xfzhou/workspace/DataCollectDAG/output
+  root_dir: ./output
 calibration:
   path: demo/calibration/sa1_cali.json
 ros:
@@ -108,7 +108,7 @@ cache:
 runtime:
   debug: true
   sample_workers: 1
-  node_workers: 8
+  node_workers: 2
   main_frame_queue_size: 3
   main_frame_delay_ms: 50
   stop_timeout_sec: 2.0
@@ -130,7 +130,7 @@ pipelines:
           class_name: person
           confidence_threshold: 0.25
           min_area_ratio: 0.01
-          device: cpu
+          device: cuda
           imgsz: 640
           failure_policy: skip_sample
       - node_id: sync_top_lidar

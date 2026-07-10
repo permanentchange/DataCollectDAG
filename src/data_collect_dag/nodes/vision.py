@@ -18,11 +18,18 @@ def _load_yolo_class():
     return YOLO
 
 
+def _load_torch_module():
+    import torch
+
+    return torch
+
+
 class YoloPersonGateNode(BaseNode):
     def __init__(self, node_config, session: Any) -> None:
         super().__init__(node_config, session)
         self._model = None
         self._model_spec = ""
+        self._model_suffix = ""
         self._class_name = "person"
         self._confidence_threshold = 0.25
         self._min_area_ratio = 0.0
@@ -37,12 +44,15 @@ class YoloPersonGateNode(BaseNode):
         if not model_path.exists():
             raise ValueError(f"missing yolo model_path: {self._model_spec}")
         self._model_spec = str(model_path)
+        self._model_suffix = model_path.suffix.lower()
         self._class_name = str(self.config.get("class_name", "person"))
         self._confidence_threshold = float(self.config.get("confidence_threshold", 0.25))
         self._min_area_ratio = float(self.config["min_area_ratio"])
-        self._device = str(self.config.get("device", "cpu"))
+        self._device = _normalize_device(self.config.get("device", "cpu"))
         self._imgsz = self.config.get("imgsz")
         self._verbose = bool(self.config.get("verbose", False))
+        if self._model_suffix != ".engine" and _device_requires_cuda(self._device):
+            _validate_torch_cuda_available(self._device)
         yolo_cls = _load_yolo_class()
         self._model = yolo_cls(self._model_spec)
 
@@ -57,9 +67,10 @@ class YoloPersonGateNode(BaseNode):
             predict_kwargs = {
                 "source": image.image_bgr,
                 "conf": self._confidence_threshold,
-                "device": self._device,
                 "verbose": self._verbose,
             }
+            if self._device is not None and (self._model_suffix != ".engine" or self._device != "cpu"):
+                predict_kwargs["device"] = self._device
             if self._imgsz is not None:
                 predict_kwargs["imgsz"] = self._imgsz
             with self._predict_lock:
@@ -167,3 +178,32 @@ def _to_numpy(value: Any) -> np.ndarray:
     if hasattr(value, "numpy"):
         value = value.numpy()
     return np.asarray(value)
+
+
+def _normalize_device(value: Any) -> str:
+    device = str(value or "cpu").strip().lower()
+    if not device:
+        return "cpu"
+    if device == "gpu":
+        return "0"
+    if device.startswith("gpu:") and device[4:].isdigit():
+        return device[4:]
+    if device == "cuda":
+        return "0"
+    return device
+
+
+def _device_requires_cuda(device: Optional[str]) -> bool:
+    if device is None:
+        return False
+    normalized = str(device).strip().lower()
+    return normalized not in {"", "none", "cpu", "mps"}
+
+
+def _validate_torch_cuda_available(device: str) -> None:
+    torch = _load_torch_module()
+    if not hasattr(torch, "cuda") or not torch.cuda.is_available():
+        raise ValueError(
+            f"requested YOLO device '{device}' but torch.cuda.is_available() is False; "
+            "install a CUDA-enabled torch build or switch the node config device to 'cpu'"
+        )
