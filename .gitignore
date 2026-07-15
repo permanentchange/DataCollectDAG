@@ -5,6 +5,7 @@
 *.engine
 *.tensorrt
 *.log
+*.whl
 .goals/
 output/
 __pycache__/

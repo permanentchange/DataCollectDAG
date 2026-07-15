@@ -11,13 +11,10 @@ fi
 
 echo "Selected mode: $MODE"
 
-# 基础依赖
 pip install -U pip setuptools wheel
 pip install rospkg
 
-
 case "$MODE" in
-
     gpu)
         echo "Installing for x86 GPU device..."
         pip install "ultralytics[export]"
@@ -30,12 +27,20 @@ case "$MODE" in
 
     arm)
         echo "Installing for ARM Jetson device..."
-
+        pip install "ultralytics[export]"
         pip uninstall torch torchvision -y
 
-        pip install https://github.com/ultralytics/assets/releases/download/v0.0.0/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
+        if [ -f wheels/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl ]; then
+            pip install wheels/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
+        else
+            pip install https://github.com/ultralytics/assets/releases/download/v0.0.0/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
+        fi
 
-        pip install https://github.com/ultralytics/assets/releases/download/v0.0.0/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl
+        if [ -f wheels/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl ]; then
+            pip install wheels/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl
+        else
+            pip install https://github.com/ultralytics/assets/releases/download/v0.0.0/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl
+        fi
         ;;
 
     *)
@@ -43,9 +48,7 @@ case "$MODE" in
         echo "Usage: bash run.sh [gpu|cpu|arm]"
         exit 1
         ;;
-
 esac
-
 
 echo "Installing current project..."
 pip install -e .
