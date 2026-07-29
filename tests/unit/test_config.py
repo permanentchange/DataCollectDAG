@@ -11,7 +11,10 @@ def test_load_demo_config():
     assert "xtreme1_collect" in config.pipelines
     assert "localization" in config.topics
     assert config.runtime.debug is True
-    assert config.pipelines["xtreme1_collect"].successors["start"] == ["front_person_gate"]
+    assert config.pipelines["xtreme1_collect"].successors["start"] == ["fps_control_guard"]
+    assert config.pipelines["xtreme1_collect"].successors["fps_control_guard"] == ["front_person_gate"]
+    assert config.pipelines["xtreme1_collect"].successors["save_xtreme1"] == ["fps_control_marker"]
+    assert config.pipelines["xtreme1_collect"].successors["fps_control_marker"] == ["end"]
     assert "front_person_gate" in config.pipelines["xtreme1_collect"].nodes_by_id
     assert config.control.pause_topic == "/data_collect/pause"
     assert config.control.resume_topic == "/data_collect/resume"
@@ -47,6 +50,39 @@ def test_yolo_person_gate_rejects_invalid_area_ratio(tmp_path):
     path = tmp_path / "invalid.yaml"
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     with pytest.raises(ConfigError, match="min_area_ratio"):
+        load_app_config(path)
+
+
+def test_fps_guard_requires_positive_max_fps(tmp_path):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    nodes = payload["pipelines"]["xtreme1_collect"]["nodes"]
+    guard = next(node for node in nodes if node["node_id"] == "fps_control_guard")
+    guard["config"]["max_fps"] = 0
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ConfigError, match="max_fps"):
+        load_app_config(path)
+
+
+def test_fps_guard_requires_gate_id(tmp_path):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    nodes = payload["pipelines"]["xtreme1_collect"]["nodes"]
+    guard = next(node for node in nodes if node["node_id"] == "fps_control_guard")
+    guard["config"]["gate_id"] = ""
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ConfigError, match="gate_id"):
+        load_app_config(path)
+
+
+def test_fps_marker_requires_gate_id(tmp_path):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    nodes = payload["pipelines"]["xtreme1_collect"]["nodes"]
+    marker = next(node for node in nodes if node["node_id"] == "fps_control_marker")
+    marker["config"]["gate_id"] = ""
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ConfigError, match="gate_id"):
         load_app_config(path)
 
 

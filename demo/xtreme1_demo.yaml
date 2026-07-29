@@ -121,6 +121,11 @@ pipelines:
     nodes:
       - node_id: start
         type: start
+      - node_id: fps_control_guard
+        type: fps_guard
+        config:
+          gate_id: saved_sample_fps
+          max_fps: 1.0
       - node_id: front_person_gate
         type: yolo_person_gate
         inputs:
@@ -314,10 +319,15 @@ pipelines:
           required_inputs:
             - image_front
             - pointcloud
+      - node_id: fps_control_marker
+        type: fps_marker
+        config:
+          gate_id: saved_sample_fps
       - node_id: end
         type: end
     edges:
-      - [start, front_person_gate]
+      - [start, fps_control_guard]
+      - [fps_control_guard, front_person_gate]
       - [front_person_gate, sync_top_lidar]
       - [front_person_gate, sync_corner_lidars]
       - [front_person_gate, sync_fisheye_images]
@@ -338,4 +348,5 @@ pipelines:
       - [rear_right_to_base, aggregate_pointclouds]
       - [sync_fisheye_images, save_xtreme1]
       - [aggregate_pointclouds, save_xtreme1]
-      - [save_xtreme1, end]
+      - [save_xtreme1, fps_control_marker]
+      - [fps_control_marker, end]

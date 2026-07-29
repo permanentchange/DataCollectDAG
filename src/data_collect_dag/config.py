@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -197,6 +198,18 @@ def _validate_node_config(pipeline_name: str, node_config: NodeConfig, topics: D
         source = str(node_config.config.get("source", ""))
         if source not in topics:
             raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} references unknown source topic_key: {source}")
+    elif node_config.node_type == "fps_guard":
+        _validate_non_empty_gate_id(pipeline_name, node_config)
+        if "max_fps" not in node_config.config:
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing max_fps")
+        try:
+            max_fps = float(node_config.config["max_fps"])
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} max_fps must be > 0") from exc
+        if not math.isfinite(max_fps) or max_fps <= 0.0:
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} max_fps must be > 0")
+    elif node_config.node_type == "fps_marker":
+        _validate_non_empty_gate_id(pipeline_name, node_config)
     elif node_config.node_type == "multi_time_sync":
         for source in list(node_config.config.get("sources") or []):
             if source not in topics:
@@ -226,6 +239,13 @@ def _validate_node_config(pipeline_name: str, node_config: NodeConfig, topics: D
         failure_policy = str(node_config.config.get("failure_policy", "skip_sample"))
         if failure_policy != "skip_sample":
             raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} unsupported failure_policy: {failure_policy}")
+
+
+def _validate_non_empty_gate_id(pipeline_name: str, node_config: NodeConfig) -> None:
+    raw_gate_id = node_config.config.get("gate_id")
+    gate_id = str(raw_gate_id).strip() if raw_gate_id is not None else ""
+    if not gate_id:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing gate_id")
 
 
 def _dfs(root: str, adjacency: Dict[str, List[str]]) -> Set[str]:

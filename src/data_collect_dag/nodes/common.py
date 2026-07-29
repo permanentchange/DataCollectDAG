@@ -28,6 +28,51 @@ class EndNode(BaseNode):
         return self.ok()
 
 
+class FpsGuardNode(BaseNode):
+    def setup(self) -> None:
+        self._gate_id = str(self.config["gate_id"]).strip()
+        max_fps = float(self.config["max_fps"])
+        self._min_interval_ns = 1_000_000_000.0 / max_fps
+
+    def run(self, sample) -> NodeOutcome:
+        timestamp_ns = int(sample.get("main_frame").meta.source_timestamp_ns)
+        last_timestamp_ns = self.session.get_fps_gate_last_timestamp_ns(self._gate_id)
+        if last_timestamp_ns is None:
+            return self.ok()
+        elapsed_ns = timestamp_ns - last_timestamp_ns
+        if elapsed_ns < self._min_interval_ns:
+            reason = f"{self.node_id}_fps_limited"
+            self.logger.debug(
+                "fps guard skip sample_id=%s node_id=%s gate_id=%s timestamp_ns=%s last_timestamp_ns=%s elapsed_ns=%s min_interval_ns=%.3f",
+                sample.sample_id,
+                self.node_id,
+                self._gate_id,
+                timestamp_ns,
+                last_timestamp_ns,
+                elapsed_ns,
+                self._min_interval_ns,
+            )
+            return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=reason)
+        return self.ok()
+
+
+class FpsMarkerNode(BaseNode):
+    def setup(self) -> None:
+        self._gate_id = str(self.config["gate_id"]).strip()
+
+    def run(self, sample) -> NodeOutcome:
+        timestamp_ns = int(sample.get("main_frame").meta.source_timestamp_ns)
+        self.session.mark_fps_gate_timestamp_ns(self._gate_id, timestamp_ns)
+        self.logger.debug(
+            "fps marker update sample_id=%s node_id=%s gate_id=%s timestamp_ns=%s",
+            sample.sample_id,
+            self.node_id,
+            self._gate_id,
+            timestamp_ns,
+        )
+        return self.ok()
+
+
 class TimeSyncNode(BaseNode):
     def run(self, sample) -> NodeOutcome:
         reference_frame = sample.get(self.inputs["reference_frame"])

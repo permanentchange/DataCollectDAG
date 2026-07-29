@@ -5,7 +5,7 @@ import logging
 import queue
 import threading
 import time
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 from data_collect_dag.cache import SessionInputCache
 from data_collect_dag.control import ControlCommand
@@ -26,6 +26,8 @@ from data_collect_dag.models import (
 from data_collect_dag.nodes import (
     AggregatePointCloudNode,
     EndNode,
+    FpsGuardNode,
+    FpsMarkerNode,
     LocalizationRangeNode,
     MultiTimeSyncNode,
     PointCloudMotionCompensationNode,
@@ -46,6 +48,8 @@ from data_collect_dag.summary import SummaryWriter
 NODE_TYPES = {
     "start": StartNode,
     "end": EndNode,
+    "fps_guard": FpsGuardNode,
+    "fps_marker": FpsMarkerNode,
     "time_sync": TimeSyncNode,
     "multi_time_sync": MultiTimeSyncNode,
     "localization_range": LocalizationRangeNode,
@@ -88,6 +92,8 @@ class SessionRuntime:
         self._node_pool = None
         self._warnings = []
         self._warnings_lock = threading.Lock()
+        self._fps_gate_lock = threading.Lock()
+        self._fps_gate_last_timestamp_ns: Dict[str, int] = {}
         self._last_error = None
         self._sample_records = []
         self._sample_records_lock = threading.Lock()
@@ -256,6 +262,16 @@ class SessionRuntime:
             ready_at = time.monotonic() + max(0.0, self.app_config.runtime.main_frame_delay_ms / 1000.0)
             self._enqueue_main_frame_event(MainFrameEvent(main_frame=frame, ready_at_monotonic=ready_at))
             self.status_manager.update_metrics(self.metrics.metrics)
+
+    def get_fps_gate_last_timestamp_ns(self, gate_id: str) -> Optional[int]:
+        with self._fps_gate_lock:
+            return self._fps_gate_last_timestamp_ns.get(gate_id)
+
+    def mark_fps_gate_timestamp_ns(self, gate_id: str, timestamp_ns: int) -> None:
+        with self._fps_gate_lock:
+            previous = self._fps_gate_last_timestamp_ns.get(gate_id)
+            if previous is None or timestamp_ns > previous:
+                self._fps_gate_last_timestamp_ns[gate_id] = timestamp_ns
 
     def _sample_loop(self) -> None:
         while not self.cancel_event.is_set():

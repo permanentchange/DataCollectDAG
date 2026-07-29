@@ -2,6 +2,8 @@ from data_collect_dag.nodes.base import BaseNode
 from data_collect_dag.nodes.common import (
     AggregatePointCloudNode,
     EndNode,
+    FpsGuardNode,
+    FpsMarkerNode,
     LocalizationRangeNode,
     MultiTimeSyncNode,
     PointCloudMotionCompensationNode,
@@ -18,6 +20,8 @@ __all__ = [
     "AggregatePointCloudNode",
     "BaseNode",
     "EndNode",
+    "FpsGuardNode",
+    "FpsMarkerNode",
     "LocalizationRangeNode",
     "MultiTimeSyncNode",
     "PointCloudMotionCompensationNode",
