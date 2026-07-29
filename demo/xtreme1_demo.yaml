@@ -114,6 +114,7 @@ runtime:
   stop_timeout_sec: 2.0
 pipelines:
   xtreme1_collect:
+    description: Collect data and save it as the xtreme1 dataset format.
     main_source: front_wide_camera
     stop_conditions:
       max_duration_sec: 600
@@ -126,15 +127,22 @@ pipelines:
         config:
           gate_id: saved_sample_fps
           max_fps: 1.0
-      - node_id: front_person_gate
-        type: yolo_person_gate
+      - node_id: front_yolo_gate
+        type: yolo_gate
         inputs:
           image: main_frame
         config:
           model_path: demo/models/yolo_person_model.pt
-          class_name: person
-          confidence_threshold: 0.25
-          min_area_ratio: 0.01
+          class_names:
+            - person
+            - car
+          confidence_thresholds:
+            - 0.25
+            - 0.25
+          min_area_ratios:
+            - 0.01
+            - 0.01
+          predict_conf: 0.25
           device: cuda
           imgsz: 640
           failure_policy: skip_sample
@@ -327,10 +335,10 @@ pipelines:
         type: end
     edges:
       - [start, fps_control_guard]
-      - [fps_control_guard, front_person_gate]
-      - [front_person_gate, sync_top_lidar]
-      - [front_person_gate, sync_corner_lidars]
-      - [front_person_gate, sync_fisheye_images]
+      - [fps_control_guard, front_yolo_gate]
+      - [front_yolo_gate, sync_top_lidar]
+      - [front_yolo_gate, sync_corner_lidars]
+      - [front_yolo_gate, sync_fisheye_images]
       - [sync_top_lidar, top_lidar_motion]
       - [top_lidar_motion, top_lidar_to_base]
       - [top_lidar_to_base, aggregate_pointclouds]

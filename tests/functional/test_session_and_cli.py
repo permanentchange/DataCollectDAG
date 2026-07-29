@@ -19,7 +19,9 @@ def test_session_manager_start_stop_replace(tmp_path, monkeypatch):
     runtime = AppRuntime(Path("demo/xtreme1_demo.yaml"), "xtreme1_collect")
     model_path = tmp_path / "person.pt"
     model_path.write_text("fake-model", encoding="utf-8")
-    runtime.app_config.pipelines["xtreme1_collect"].nodes_by_id["front_person_gate"].config["model_path"] = str(model_path)
+    gate_config = runtime.app_config.pipelines["xtreme1_collect"].nodes_by_id["front_yolo_gate"].config
+    gate_config["model_path"] = str(model_path)
+    gate_config["device"] = "cpu"
     runtime.app_config.output_root_dir = tmp_path
     monkeypatch.setattr(vision, "_load_yolo_class", lambda: _FakeYOLO)
     runtime.session_manager = SessionManager(

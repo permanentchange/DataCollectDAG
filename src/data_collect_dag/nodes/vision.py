@@ -24,15 +24,17 @@ def _load_torch_module():
     return torch
 
 
-class YoloPersonGateNode(BaseNode):
+class YoloGateNode(BaseNode):
     def __init__(self, node_config, session: Any) -> None:
         super().__init__(node_config, session)
         self._model = None
         self._model_spec = ""
         self._model_suffix = ""
-        self._class_name = "person"
-        self._confidence_threshold = 0.25
-        self._min_area_ratio = 0.0
+        self._class_names: List[str] = []
+        self._confidence_thresholds: List[float] = []
+        self._min_area_ratios: List[float] = []
+        self._target_thresholds: Dict[str, Dict[str, float]] = {}
+        self._predict_conf = 0.25
         self._device: Optional[str] = None
         self._imgsz = None
         self._verbose = False
@@ -45,9 +47,17 @@ class YoloPersonGateNode(BaseNode):
             raise ValueError(f"missing yolo model_path: {self._model_spec}")
         self._model_spec = str(model_path)
         self._model_suffix = model_path.suffix.lower()
-        self._class_name = str(self.config.get("class_name", "person"))
-        self._confidence_threshold = float(self.config.get("confidence_threshold", 0.25))
-        self._min_area_ratio = float(self.config["min_area_ratio"])
+        self._class_names = [str(value).strip() for value in self.config["class_names"]]
+        self._confidence_thresholds = [float(value) for value in self.config["confidence_thresholds"]]
+        self._min_area_ratios = [float(value) for value in self.config["min_area_ratios"]]
+        self._target_thresholds = {
+            class_name: {
+                "confidence_threshold": self._confidence_thresholds[index],
+                "min_area_ratio": self._min_area_ratios[index],
+            }
+            for index, class_name in enumerate(self._class_names)
+        }
+        self._predict_conf = float(self.config["predict_conf"])
         self._device = _normalize_device(self.config.get("device", "cpu"))
         self._imgsz = self.config.get("imgsz")
         self._verbose = bool(self.config.get("verbose", False))
@@ -61,12 +71,14 @@ class YoloPersonGateNode(BaseNode):
             image: ImageFrame = ensure_image_frame_decoded(sample.get(self.inputs["image"]))
         except MissingContextKeyError:
             return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_missing_input")
+        except ValueError:
+            return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_image_decode_failed")
         if image.image_bgr is None:
             return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_image_decode_failed")
         try:
             predict_kwargs = {
                 "source": image.image_bgr,
-                "conf": self._confidence_threshold,
+                "conf": self._predict_conf,
                 "verbose": self._verbose,
             }
             if self._device is not None and (self._model_suffix != ".engine" or self._device != "cpu"):
@@ -76,7 +88,7 @@ class YoloPersonGateNode(BaseNode):
             with self._predict_lock:
                 results = self._model.predict(**predict_kwargs)
         except Exception as exc:
-            self.logger.exception("person gate inference failed sample_id=%s node_id=%s", sample.sample_id, self.node_id)
+            self.logger.exception("yolo gate inference failed sample_id=%s node_id=%s", sample.sample_id, self.node_id)
             return NodeOutcome(
                 status=NodeResult.SKIP_SAMPLE,
                 reason=f"{self.node_id}_inference_failed",
@@ -91,7 +103,7 @@ class YoloPersonGateNode(BaseNode):
             return self.ok(metadata=summary)
         return NodeOutcome(
             status=NodeResult.SKIP_SAMPLE,
-            reason=f"{self.node_id}_person_not_detected",
+            reason=f"{self.node_id}_target_not_detected",
             metadata=summary,
         )
 
@@ -114,14 +126,18 @@ class YoloPersonGateNode(BaseNode):
         for index in range(count):
             class_id = int(cls_values[index])
             class_name = _resolve_class_name(names, class_id)
-            if not _matches_target_class(class_name, class_id, self._class_name, names):
+            target_class = _resolve_target_class(class_name, class_id, self._class_names, names)
+            if target_class is None:
                 continue
+            thresholds = self._target_thresholds[target_class]
             x1, y1, x2, y2 = [float(value) for value in xyxy_values[index]]
             width = max(0.0, x2 - x1)
             height = max(0.0, y2 - y1)
             area_ratio = (width * height) / image_area
             confidence = float(conf_values[index])
-            passed = confidence >= self._confidence_threshold and area_ratio >= self._min_area_ratio
+            confidence_threshold = thresholds["confidence_threshold"]
+            min_area_ratio = thresholds["min_area_ratio"]
+            passed = confidence >= confidence_threshold and area_ratio >= min_area_ratio
             if passed:
                 passed_count += 1
             max_confidence = max(max_confidence, confidence)
@@ -130,23 +146,27 @@ class YoloPersonGateNode(BaseNode):
                 {
                     "class_id": class_id,
                     "class_name": class_name,
+                    "target_class": target_class,
                     "confidence": round(confidence, 6),
+                    "confidence_threshold": confidence_threshold,
                     "area_ratio": round(area_ratio, 6),
+                    "min_area_ratio": min_area_ratio,
                     "bbox_xyxy": [round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)],
                     "passed": passed,
                 }
             )
         return {
             "passed": passed_count > 0,
-            "person_count": passed_count,
-            "person_candidates": detections,
+            "matched_count": passed_count,
+            "target_candidates": detections,
             "max_confidence": round(max_confidence, 6),
             "max_area_ratio": round(max_area_ratio, 6),
             "image_size": [int(image.width), int(image.height)],
             "model_path": self._model_spec,
-            "class_name": self._class_name,
-            "confidence_threshold": self._confidence_threshold,
-            "min_area_ratio": self._min_area_ratio,
+            "class_names": list(self._class_names),
+            "confidence_thresholds": list(self._confidence_thresholds),
+            "min_area_ratios": list(self._min_area_ratios),
+            "predict_conf": self._predict_conf,
         }
 
 
@@ -164,10 +184,12 @@ def _resolve_class_name(names: Dict[int, str], class_id: int) -> str:
     return names.get(class_id, str(class_id))
 
 
-def _matches_target_class(class_name: str, class_id: int, target_class: str, names: Dict[int, str]) -> bool:
-    if class_name == target_class:
-        return True
-    return not names and target_class == "person" and class_id == 0
+def _resolve_target_class(class_name: str, class_id: int, target_classes: List[str], names: Dict[int, str]) -> Optional[str]:
+    if class_name in target_classes:
+        return class_name
+    if not names and "person" in target_classes and class_id == 0:
+        return "person"
+    return None
 
 
 def _to_numpy(value: Any) -> np.ndarray:

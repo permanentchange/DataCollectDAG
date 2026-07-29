@@ -36,7 +36,7 @@ from data_collect_dag.nodes import (
     PointCloudTransformNode,
     StartNode,
     TimeSyncNode,
-    YoloPersonGateNode,
+    YoloGateNode,
     Xtreme1SaveNode,
 )
 from data_collect_dag.ros_adapter import RosAdapter
@@ -58,7 +58,7 @@ NODE_TYPES = {
     "pointcloud_transform": PointCloudTransformNode,
     "pointcloud_roi_crop": PointCloudRoiCropNode,
     "aggregate_pointclouds": AggregatePointCloudNode,
-    "yolo_person_gate": YoloPersonGateNode,
+    "yolo_gate": YoloGateNode,
     "xtreme1_structured_save": Xtreme1SaveNode,
 }
 

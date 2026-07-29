@@ -220,25 +220,8 @@ def _validate_node_config(pipeline_name: str, node_config: NodeConfig, topics: D
             raise ConfigError(
                 f"pipeline {pipeline_name} node {node_config.node_id} references unknown localization_source topic_key: {localization_source}"
             )
-    elif node_config.node_type == "yolo_person_gate":
-        model_path = str(node_config.config.get("model_path", "")).strip()
-        if not model_path:
-            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing model_path")
-        if "image" not in node_config.inputs:
-            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing image input")
-        if "min_area_ratio" not in node_config.config:
-            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing min_area_ratio")
-        confidence_threshold = float(node_config.config.get("confidence_threshold", 0.25))
-        min_area_ratio = float(node_config.config["min_area_ratio"])
-        if confidence_threshold < 0.0 or confidence_threshold > 1.0:
-            raise ConfigError(
-                f"pipeline {pipeline_name} node {node_config.node_id} confidence_threshold must be between 0 and 1"
-            )
-        if min_area_ratio < 0.0 or min_area_ratio > 1.0:
-            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} min_area_ratio must be between 0 and 1")
-        failure_policy = str(node_config.config.get("failure_policy", "skip_sample"))
-        if failure_policy != "skip_sample":
-            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} unsupported failure_policy: {failure_policy}")
+    elif node_config.node_type == "yolo_gate":
+        _validate_yolo_gate_config(pipeline_name, node_config)
 
 
 def _validate_non_empty_gate_id(pipeline_name: str, node_config: NodeConfig) -> None:
@@ -246,6 +229,71 @@ def _validate_non_empty_gate_id(pipeline_name: str, node_config: NodeConfig) -> 
     gate_id = str(raw_gate_id).strip() if raw_gate_id is not None else ""
     if not gate_id:
         raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing gate_id")
+
+
+def _validate_yolo_gate_config(pipeline_name: str, node_config: NodeConfig) -> None:
+    deprecated_keys = {"class_name", "confidence_threshold", "min_area_ratio"} & set(node_config.config)
+    if deprecated_keys:
+        deprecated = ", ".join(sorted(deprecated_keys))
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} unsupported yolo_gate config keys: {deprecated}")
+    model_path = str(node_config.config.get("model_path", "")).strip()
+    if not model_path:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing model_path")
+    if "image" not in node_config.inputs:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing image input")
+
+    class_names = _validate_non_empty_string_list(pipeline_name, node_config, "class_names")
+    confidence_thresholds = _validate_ratio_list(pipeline_name, node_config, "confidence_thresholds")
+    min_area_ratios = _validate_ratio_list(pipeline_name, node_config, "min_area_ratios")
+    if len(set(class_names)) != len(class_names):
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} class_names must not contain duplicates")
+    if len(confidence_thresholds) != len(class_names):
+        raise ConfigError(
+            f"pipeline {pipeline_name} node {node_config.node_id} confidence_thresholds length must match class_names"
+        )
+    if len(min_area_ratios) != len(class_names):
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} min_area_ratios length must match class_names")
+
+    predict_conf = _validate_ratio_value(pipeline_name, node_config, "predict_conf", node_config.config.get("predict_conf"))
+    if predict_conf > min(confidence_thresholds):
+        raise ConfigError(
+            f"pipeline {pipeline_name} node {node_config.node_id} predict_conf must be <= min(confidence_thresholds)"
+        )
+    failure_policy = str(node_config.config.get("failure_policy", "skip_sample"))
+    if failure_policy != "skip_sample":
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} unsupported failure_policy: {failure_policy}")
+
+
+def _validate_non_empty_string_list(pipeline_name: str, node_config: NodeConfig, key: str) -> List[str]:
+    values = node_config.config.get(key)
+    if not isinstance(values, list) or not values:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} {key} must be a non-empty list")
+    result = []
+    for value in values:
+        item = str(value).strip()
+        if not item:
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} {key} must not contain empty values")
+        result.append(item)
+    return result
+
+
+def _validate_ratio_list(pipeline_name: str, node_config: NodeConfig, key: str) -> List[float]:
+    values = node_config.config.get(key)
+    if not isinstance(values, list) or not values:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} {key} must be a non-empty list")
+    return [_validate_ratio_value(pipeline_name, node_config, key, value) for value in values]
+
+
+def _validate_ratio_value(pipeline_name: str, node_config: NodeConfig, key: str, value: Any) -> float:
+    if value is None:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing {key}")
+    try:
+        ratio = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} {key} must be between 0 and 1") from exc
+    if not math.isfinite(ratio) or ratio < 0.0 or ratio > 1.0:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} {key} must be between 0 and 1")
+    return ratio
 
 
 def _dfs(root: str, adjacency: Dict[str, List[str]]) -> Set[str]:

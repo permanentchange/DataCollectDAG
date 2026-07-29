@@ -13,7 +13,7 @@ from data_collect_dag.nodes.common import (
     StartNode,
     TimeSyncNode,
 )
-from data_collect_dag.nodes.vision import YoloPersonGateNode
+from data_collect_dag.nodes.vision import YoloGateNode
 from data_collect_dag.nodes.xtreme1 import Xtreme1SaveNode
 
 __all__ = [
@@ -30,6 +30,6 @@ __all__ = [
     "PointCloudTransformNode",
     "StartNode",
     "TimeSyncNode",
-    "YoloPersonGateNode",
+    "YoloGateNode",
     "Xtreme1SaveNode",
 ]
