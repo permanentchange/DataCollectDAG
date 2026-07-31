@@ -69,14 +69,8 @@ class RosAdapter:
             subscriber = rospy.Subscriber(topic_config.topic, msg_class, self._make_topic_callback(topic_key, topic_config), queue_size=50)
             self._subscribers.append(subscriber)
         StringMsg = import_std_msgs_string()
-        if self._control.start_topic:
-            self._subscribers.append(rospy.Subscriber(self._control.start_topic, StringMsg, self._on_start_topic, queue_size=10))
-        if self._control.stop_topic:
-            self._subscribers.append(rospy.Subscriber(self._control.stop_topic, StringMsg, self._on_stop_topic, queue_size=10))
-        if self._control.pause_topic:
-            self._subscribers.append(rospy.Subscriber(self._control.pause_topic, StringMsg, self._on_pause_topic, queue_size=10))
-        if self._control.resume_topic:
-            self._subscribers.append(rospy.Subscriber(self._control.resume_topic, StringMsg, self._on_resume_topic, queue_size=10))
+        if self._control.control_topic:
+            self._subscribers.append(rospy.Subscriber(self._control.control_topic, StringMsg, self._on_control_topic, queue_size=10))
         if self._control.status_topic:
             self._publishers["status_topic"] = rospy.Publisher(self._control.status_topic, StringMsg, queue_size=10, latch=True)
             self._status_stop.clear()
@@ -172,26 +166,40 @@ class RosAdapter:
             self._publishers["status_topic"].publish(msg)
             self._status_stop.wait(0.5)
 
-    def _on_start_topic(self, msg: Any) -> None:
-        if self._start_callback is None:
-            return
+    def _on_control_topic(self, msg: Any) -> None:
         payload = getattr(msg, "data", "")
-        pipeline_name = str(payload).strip() or ""
-        if not pipeline_name:
-            pipeline_name = ""
-        self._start_callback(pipeline_name)
-
-    def _on_stop_topic(self, msg: Any) -> None:
-        if self._stop_callback is not None:
-            self._stop_callback()
-
-    def _on_pause_topic(self, msg: Any) -> None:
-        if self._pause_callback is not None:
-            self._pause_callback()
-
-    def _on_resume_topic(self, msg: Any) -> None:
-        if self._resume_callback is not None:
-            self._resume_callback()
+        try:
+            command = json.loads(str(payload))
+        except (TypeError, json.JSONDecodeError):
+            self._logger.warning("ignoring invalid ROS control payload: expected JSON object")
+            return
+        if not isinstance(command, dict):
+            self._logger.warning("ignoring invalid ROS control payload: expected JSON object")
+            return
+        command_name = command.get("command")
+        if command_name not in {"start", "stop", "pause", "resume"}:
+            self._logger.warning("ignoring invalid ROS control command=%r", command_name)
+            return
+        if command_name == "start":
+            if self._start_callback is None:
+                return
+            pipeline_name = command.get("pipeline")
+            if not isinstance(pipeline_name, str) or not pipeline_name.strip():
+                self._logger.warning("ignoring start control command without non-empty pipeline")
+                return
+            self._start_callback(pipeline_name.strip())
+            return
+        if command_name == "stop":
+            if self._stop_callback is not None:
+                self._stop_callback()
+            return
+        if command_name == "pause":
+            if self._pause_callback is not None:
+                self._pause_callback()
+            return
+        if command_name == "resume":
+            if self._resume_callback is not None:
+                self._resume_callback()
 
     def _handle_status_service(self, _request: Any):
         _Trigger, TriggerResponse = import_std_srvs_trigger()

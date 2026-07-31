@@ -16,10 +16,28 @@ def test_load_demo_config():
     assert config.pipelines["xtreme1_collect"].successors["save_xtreme1"] == ["fps_control_marker"]
     assert config.pipelines["xtreme1_collect"].successors["fps_control_marker"] == ["end"]
     assert "front_yolo_gate" in config.pipelines["xtreme1_collect"].nodes_by_id
-    assert config.control.pause_topic == "/data_collect/pause"
-    assert config.control.resume_topic == "/data_collect/resume"
+    assert config.control.control_topic == "/data_collect/control"
+    assert config.control.status_topic == "/data_collect/status"
     assert config.pipelines["xtreme1_collect"].stop_conditions.max_duration_sec == 600.0
     assert config.pipelines["xtreme1_collect"].stop_conditions.max_saved_samples == 1000
+
+
+def test_control_config_rejects_legacy_control_topics(tmp_path):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    payload["ros"]["control"]["start_topic"] = "/data_collect/start"
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ConfigError, match="control_topic"):
+        load_app_config(path)
+
+
+def test_control_config_rejects_unknown_keys(tmp_path):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    payload["ros"]["control"]["unexpected_topic"] = "/data_collect/unexpected"
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ConfigError, match="unknown ros.control keys"):
+        load_app_config(path)
 
 
 def test_invalid_sample_workers_fails(tmp_path):

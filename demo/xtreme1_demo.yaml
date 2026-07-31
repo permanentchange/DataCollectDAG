@@ -5,10 +5,7 @@ calibration:
 ros:
   node_name: data_collect_dag
   control:
-    start_topic: /data_collect/start
-    stop_topic: /data_collect/stop
-    pause_topic: /data_collect/pause
-    resume_topic: /data_collect/resume
+    control_topic: /data_collect/control
     status_topic: /data_collect/status
   topics:
     front_wide_camera:

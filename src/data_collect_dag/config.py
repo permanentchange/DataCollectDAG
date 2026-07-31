@@ -50,7 +50,7 @@ def load_app_config(path: Path) -> AppConfig:
         config_path=path.resolve(),
         output_root_dir=Path(output.get("root_dir", "output")).resolve(),
         ros_node_name=str(ros.get("node_name", "data_collect_dag")),
-        control=ControlConfig(**(ros.get("control") or {})),
+        control=_parse_control_config(ros.get("control") or {}),
         topics=topics,
         cache_policies=cache_policies,
         runtime=runtime_config,
@@ -68,6 +68,23 @@ def _validate_runtime_config(runtime: RuntimeConfig) -> None:
         raise ConfigError("runtime.main_frame_queue_size must be >= 1")
     if runtime.stop_timeout_sec <= 0:
         raise ConfigError("runtime.stop_timeout_sec must be > 0")
+
+
+def _parse_control_config(raw_control: Dict[str, Any]) -> ControlConfig:
+    if not isinstance(raw_control, dict):
+        raise ConfigError("ros.control must be a mapping")
+    legacy_keys = {"start_topic", "stop_topic", "pause_topic", "resume_topic"} & set(raw_control)
+    if legacy_keys:
+        legacy = ", ".join(sorted(legacy_keys))
+        raise ConfigError(
+            f"unsupported legacy ros.control keys: {legacy}; use control_topic: /data_collect/control"
+        )
+    allowed_keys = {"control_topic", "status_topic", "start_service", "stop_service", "status_service"}
+    unknown_keys = set(raw_control) - allowed_keys
+    if unknown_keys:
+        unknown = ", ".join(sorted(unknown_keys))
+        raise ConfigError(f"unknown ros.control keys: {unknown}")
+    return ControlConfig(**raw_control)
 
 
 def _parse_topics(raw_topics: Dict[str, Any]) -> Dict[str, TopicConfig]:

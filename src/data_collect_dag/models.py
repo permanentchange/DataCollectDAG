@@ -208,10 +208,7 @@ class RuntimeConfig:
 
 @dataclass
 class ControlConfig:
-    start_topic: Optional[str] = None
-    stop_topic: Optional[str] = None
-    pause_topic: Optional[str] = None
-    resume_topic: Optional[str] = None
+    control_topic: Optional[str] = None
     status_topic: Optional[str] = None
     start_service: Optional[str] = None
     stop_service: Optional[str] = None
