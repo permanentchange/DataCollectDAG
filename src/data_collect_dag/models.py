@@ -289,6 +289,7 @@ class StatusSnapshot:
     current_session_id: Optional[str] = None
     current_pipeline_name: Optional[str] = None
     start_time: Optional[str] = None
+    disk_free_gb: Optional[float] = None
     last_error: Optional[str] = None
     warnings: int = 0
     received_messages: Dict[str, int] = field(default_factory=dict)
@@ -308,6 +309,7 @@ class StatusSnapshot:
             "current_session_id": self.current_session_id,
             "current_pipeline_name": self.current_pipeline_name,
             "start_time": self.start_time,
+            "disk_free_gb": self.disk_free_gb,
             "last_error": self.last_error,
             "warnings": self.warnings,
             "received_messages": self.received_messages,

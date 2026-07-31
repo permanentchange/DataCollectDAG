@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+import shutil
 import threading
 from typing import Optional
 
@@ -7,9 +9,10 @@ from data_collect_dag.models import RecentSessionStatus, SessionMetrics, StatusS
 
 
 class StatusManager:
-    def __init__(self) -> None:
+    def __init__(self, disk_usage_path: Optional[Path] = None) -> None:
         self._lock = threading.Lock()
         self._snapshot = StatusSnapshot()
+        self._disk_usage_path = disk_usage_path
 
     def set_running(self, session_id: str, pipeline_name: str, start_time: str) -> None:
         with self._lock:
@@ -54,4 +57,24 @@ class StatusManager:
         with self._lock:
             cloned = StatusSnapshot()
             cloned.__dict__.update(self._snapshot.__dict__)
-            return cloned
+        cloned.disk_free_gb = self._get_disk_free_gb()
+        return cloned
+
+    def _get_disk_free_gb(self) -> Optional[float]:
+        if self._disk_usage_path is None:
+            return None
+        try:
+            usage_path = self._nearest_existing_path(self._disk_usage_path)
+            usage = shutil.disk_usage(usage_path)
+        except OSError:
+            return None
+        return round(usage.free / 1_000_000_000, 2)
+
+    def _nearest_existing_path(self, path: Path) -> Path:
+        candidate = path
+        while not candidate.exists():
+            parent = candidate.parent
+            if parent == candidate:
+                return candidate
+            candidate = parent
+        return candidate

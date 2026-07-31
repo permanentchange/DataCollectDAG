@@ -38,7 +38,7 @@ class AppRuntime:
         self.pipeline_name = pipeline_name
         if self.app_config.calibration_path is None:
             raise ValueError("calibration.path is required")
-        self.status_manager = StatusManager()
+        self.status_manager = StatusManager(disk_usage_path=self.app_config.output_root_dir)
         self.ros_adapter = RosAdapter(self.app_config.topics, self.app_config.ros_node_name, self.app_config.control)
         self.calibration = load_calibration(self.app_config.calibration_path)
         self.command_queue = ControlCommandQueue()

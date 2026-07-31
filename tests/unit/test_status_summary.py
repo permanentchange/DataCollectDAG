@@ -1,4 +1,4 @@
-from pathlib import Path
+from types import SimpleNamespace
 
 from data_collect_dag.models import RecentSessionStatus, SessionSummary, SessionMetrics
 from data_collect_dag.status import StatusManager
@@ -21,6 +21,35 @@ def test_status_manager_snapshot_updates():
     assert manager.snapshot().tool_state.value == "RUNNING"
     manager.set_idle(RecentSessionStatus.STOPPED)
     assert manager.snapshot().tool_state.value == "IDLE"
+
+
+def test_status_manager_snapshot_reports_output_disk_free_gb(monkeypatch, tmp_path):
+    missing_output_root = tmp_path / "missing" / "output"
+    calls = []
+
+    def fake_disk_usage(path):
+        calls.append(path)
+        return SimpleNamespace(free=12_345_678_901)
+
+    monkeypatch.setattr("data_collect_dag.status.shutil.disk_usage", fake_disk_usage)
+    manager = StatusManager(disk_usage_path=missing_output_root)
+
+    payload = manager.snapshot().to_dict()
+
+    assert payload["disk_free_gb"] == 12.35
+    assert calls == [tmp_path]
+
+
+def test_status_manager_snapshot_sets_disk_free_gb_to_none_when_query_fails(monkeypatch, tmp_path):
+    def fake_disk_usage(_path):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr("data_collect_dag.status.shutil.disk_usage", fake_disk_usage)
+    manager = StatusManager(disk_usage_path=tmp_path)
+
+    payload = manager.snapshot().to_dict()
+
+    assert payload["disk_free_gb"] is None
 
 
 def test_summary_writer_writes_json(tmp_path):
