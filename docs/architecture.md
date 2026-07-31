@@ -161,10 +161,7 @@ calibration:
 ros:
   node_name: data_collect_dag
   control:
-    start_topic: /data_collect/start
-    stop_topic: /data_collect/stop
-    pause_topic: /data_collect/pause
-    resume_topic: /data_collect/resume
+    control_topic: /data_collect/control
     status_topic: /data_collect/status
     start_service: ...
     stop_service: ...
@@ -225,18 +222,21 @@ pipelines:
 配置校验包括：
 
 1. 根对象必须是 mapping。
-2. `ros.topics` 必须非空，每个 topic 必须包含 `topic`、`msg_type`、`role`。
-3. 每个 topic 必须从 `cache.defaults_by_role` 和 `cache.topic_overrides` 合并出 `max_frames` 和 `max_age_sec`。
-4. `runtime.sample_workers`、`runtime.node_workers`、`runtime.main_frame_queue_size` 必须大于等于 1；`runtime.stop_timeout_sec` 必须大于 0。
-5. `pipelines` 必须非空。
-6. 每个 pipeline 的 `main_source` 必须存在于 `ros.topics`。
-7. `node_id` 不能重复。
-8. edge 两端必须引用已声明节点。
-9. 每个 pipeline 必须恰好有一个 `type: start` 节点和一个 `type: end` 节点。
-10. graph 必须无环，所有节点必须从 start 可达，并且都能到达 end。
-11. `time_sync.source`、`multi_time_sync.sources`、`pointcloud_motion_compensation.localization_source` 必须引用已声明 topic。
-12. `yolo_gate` 必须配置 `model_path`、`image` 输入、`class_names`、`confidence_thresholds`、`min_area_ratios`、`predict_conf`；三个数组长度必须一致，阈值范围为 `[0, 1]`，且 `predict_conf <= min(confidence_thresholds)`；`failure_policy` 当前只接受 `skip_sample`。
-13. `stop_conditions.max_duration_sec` 和 `max_saved_samples` 如配置，必须大于 0。
+2. `ros.control` 必须是 mapping；只接受 `control_topic`、`status_topic`、`start_service`、`stop_service`、`status_service`。
+3. `ros.control` 中的未知字段会触发 `ConfigError`。
+4. `ros.topics` 必须非空，每个 topic 必须包含 `topic`、`msg_type`、`role`。
+5. 每个 topic 必须从 `cache.defaults_by_role` 和 `cache.topic_overrides` 合并出 `max_frames` 和 `max_age_sec`。
+6. `runtime.sample_workers`、`runtime.node_workers`、`runtime.main_frame_queue_size` 必须大于等于 1；`runtime.stop_timeout_sec` 必须大于 0。
+7. `pipelines` 必须非空。
+8. 每个 pipeline 的 `main_source` 必须存在于 `ros.topics`。
+9. `node_id` 不能重复。
+10. edge 两端必须引用已声明节点。
+11. 每个 pipeline 必须恰好有一个 `type: start` 节点和一个 `type: end` 节点。
+12. graph 必须无环，所有节点必须从 start 可达，并且都能到达 end。
+13. `time_sync.source`、`multi_time_sync.sources`、`pointcloud_motion_compensation.localization_source` 必须引用已声明 topic。
+14. `fps_guard` 和 `fps_marker` 必须配置非空 `gate_id`；`fps_guard.max_fps` 必须存在且大于 0。
+15. `yolo_gate` 必须配置 `model_path`、`image` 输入、`class_names`、`confidence_thresholds`、`min_area_ratios`、`predict_conf`；三个数组长度必须一致，阈值范围为 `[0, 1]`，且 `predict_conf <= min(confidence_thresholds)`；`failure_policy` 当前只接受 `skip_sample`。
+16. `stop_conditions.max_duration_sec` 和 `max_saved_samples` 如配置，必须大于 0。
 
 当前配置解析不会在 `load_app_config` 阶段验证所有节点类型是否存在于 `NODE_TYPES`。未知节点类型会在 `SessionRuntime._build_nodes()` 通过 `NODE_TYPES[node_config.node_type]` 暴露为运行期错误。
 
@@ -263,6 +263,8 @@ flowchart TD
 |---|---|
 | `start` | `StartNode` |
 | `end` | `EndNode` |
+| `fps_guard` | `FpsGuardNode` |
+| `fps_marker` | `FpsMarkerNode` |
 | `time_sync` | `TimeSyncNode` |
 | `multi_time_sync` | `MultiTimeSyncNode` |
 | `localization_range` | `LocalizationRangeNode` |
@@ -335,6 +337,8 @@ teardown()
 |---|---|---|
 | `StartNode` | `run()` 直接返回 `OK`；不写入主帧 | `nodes/common.py::StartNode` |
 | `EndNode` | `run()` 直接返回 `OK` | `nodes/common.py::EndNode` |
+| `FpsGuardNode` | 按 `gate_id` 读取最近一次 marker 时间戳；未到 `max_fps` 对应间隔时跳过样本 | `nodes/common.py::FpsGuardNode` |
+| `FpsMarkerNode` | 样本保存链路完成后记录该 `gate_id` 的主帧时间戳 | `nodes/common.py::FpsMarkerNode` |
 
 主帧不是由 `StartNode` 放入上下文，而是在 `SessionRuntime._sample_loop()` 创建 `SampleContext` 后写入 `sample.put("main_frame", event.main_frame, "main_source")`。
 
@@ -490,7 +494,7 @@ value = event.main_frame
 flowchart TD
   RosStart["RosAdapter.start"] --> Resolve["resolve_message_class for every ros.topics item"]
   Resolve --> SubData["rospy.Subscriber(data topics)"]
-  Resolve --> SubControl["optional control topic subscribers"]
+  Resolve --> SubControl["optional control topic subscriber"]
   Resolve --> PubStatus["optional status publisher thread"]
   Resolve --> Services["optional Trigger services"]
   SubData --> Callback["_make_topic_callback"]
@@ -574,14 +578,16 @@ flowchart TD
 demo pipeline `xtreme1_collect` 的主要处理链来自 `demo/xtreme1_demo.yaml`：
 
 1. `front_wide_camera` 是 `main_source`。
-2. `front_yolo_gate` 对主图做 YOLO 多类别 gate。
-3. `sync_top_lidar` 同步顶置激光雷达。
-4. `sync_corner_lidars` 同步四个角雷达。
-5. `sync_fisheye_images` 同步四个鱼眼相机。
-6. 每路雷达做 motion compensation 和 transform to base。
-7. `aggregate_pointclouds` 聚合 base 点云。
-8. `save_xtreme1` 保存图片、聚合点云和相机配置。
-9. `end` 结束样本 DAG。
+2. `fps_control_guard` 按 `saved_sample_fps` 限制保存样本频率。
+3. `front_yolo_gate` 对主图做 YOLO 多类别 gate。
+4. `sync_top_lidar` 同步顶置激光雷达。
+5. `sync_corner_lidars` 同步四个角雷达。
+6. `sync_fisheye_images` 同步四个鱼眼相机。
+7. 每路雷达做 motion compensation 和 transform to base。
+8. `aggregate_pointclouds` 聚合 base 点云。
+9. `save_xtreme1` 保存图片、聚合点云和相机配置。
+10. `fps_control_marker` 在保存链路后记录主帧时间戳。
+11. `end` 结束样本 DAG。
 
 当前 demo graph 在 gate 后分为 lidar 和 fisheye 两支，保存节点依赖 `sync_fisheye_images` 和 `aggregate_pointclouds`，因此只有两支都完成后才会运行保存节点。
 
@@ -591,14 +597,14 @@ demo pipeline `xtreme1_collect` 的主要处理链来自 `demo/xtreme1_demo.yaml
 
 | kind | 产生方 | 行为 |
 |---|---|---|
-| `start` | 初始 CLI start、ROS start topic/service | 调用 `SessionManager.start(pipeline_name)` |
-| `stop` | ROS stop topic/service | 调用 `SessionManager.stop(reason, STOPPED)` |
-| `pause` | ROS pause topic | 调用 `SessionManager.pause()` |
-| `resume` | ROS resume topic | 调用 `SessionManager.resume()` |
+| `start` | 初始 CLI start、ROS control topic JSON start、ROS start service | 调用 `SessionManager.start(pipeline_name)` |
+| `stop` | ROS control topic JSON stop、ROS stop service | 调用 `SessionManager.stop(reason, STOPPED)` |
+| `pause` | ROS control topic JSON pause | 调用 `SessionManager.pause()` |
+| `resume` | ROS control topic JSON resume | 调用 `SessionManager.resume()` |
 | `complete` | session 内部 stop condition | 如果 session_id 仍是 active session，则以 `COMPLETED` stop |
 | `shutdown` | SIGINT/SIGTERM | 以 `STOPPED` stop active session，并停止 app loop |
 
-ROS start topic 使用 `std_msgs/String`，字符串内容是 pipeline 名称；空字符串回退到 CLI 指定的默认 pipeline。ROS start service 当前使用 `std_srvs/Trigger`，不能携带 pipeline 参数，只会触发默认 pipeline。stop/status service 也使用 `std_srvs/Trigger`。
+ROS control topic 使用单一 `std_msgs/String`，字符串内容是 JSON。`{"command":"start","pipeline":"<pipeline_name>"}` 启动指定 pipeline，`{"command":"pause"}`、`{"command":"resume"}`、`{"command":"stop"}` 分别暂停、恢复、停止当前任务。ROS start service 当前使用 `std_srvs/Trigger`，不能携带 pipeline 参数，只会触发默认 pipeline。stop/status service 也使用 `std_srvs/Trigger`。
 
 `SessionManager.start()` 保证同一时刻最多一个 active session。若已有 active session，新 start 会先调用 `stop(reason="replaced_by_new_start", status=STOPPED)`，再创建新 session。功能测试 `tests/functional/test_session_and_cli.py` 验证了 start、replace、stop 会创建不同 session_id 并生成 session_root。
 
@@ -680,6 +686,8 @@ FAILED
 | setup 失败或控制命令异常 | `set_last_error(message)` |
 | `SessionRuntime.stop()` 或 setup 失败 | `set_idle(recent_status)` |
 
+`StatusManager` 可接收 `disk_usage_path`。`AppRuntime` 当前传入 `app_config.output_root_dir`，因此对外状态中的 `disk_free_gb` 表示输出根目录所在文件系统的剩余空间，单位为十进制 GB，保留 2 位小数。若磁盘查询失败，该字段为 null。
+
 `StatusSnapshot.to_dict()` 当前输出字段：
 
 ```text
@@ -688,6 +696,7 @@ recent_session_status
 current_session_id
 current_pipeline_name
 start_time
+disk_free_gb
 last_error
 warnings
 received_messages
@@ -829,14 +838,14 @@ data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect
 | `tests/unit/test_cache.py` | nearest 查询、max_frames 淘汰 |
 | `tests/unit/test_sample_context.py` | put/get/remove、producer 歧义 |
 | `tests/unit/test_ros_messages.py` | image、pointcloud、localization、nmea frame 包装和延迟解析 |
-| `tests/unit/test_ros_adapter.py` | ROS message type 解析失败时 fail-fast 且不创建 subscriber |
+| `tests/unit/test_ros_adapter.py` | ROS message type 解析失败时 fail-fast、统一 control topic 订阅和 JSON 命令分发 |
 | `tests/unit/test_ros_env.py` | 标准和自定义 msg 文件定位错误报告 |
 | `tests/unit/test_time_sync_node.py` | 单源同步匹配和 required 缺失 skip |
 | `tests/unit/test_multi_time_sync_node.py` | 多源同步和共享 wait budget |
 | `tests/unit/test_yolo_gate_node.py` | YOLO gate 多类别通过、跳过、推理失败、device 规范化、CUDA 校验、模型缺失 |
 | `tests/unit/test_pointcloud_*_node.py` | 点云裁剪、变换、运动补偿、聚合 |
 | `tests/unit/test_xtreme1_save_node.py` | Xtreme1 输出文件、可选图像缺失、点云 frame 校验 |
-| `tests/unit/test_status_summary.py` | 状态快照更新和 summary JSON |
+| `tests/unit/test_status_summary.py` | 状态快照更新、磁盘剩余空间字段和 summary JSON |
 | `tests/unit/test_session_runtime.py` | 主帧队列 drop oldest、pause/resume、max duration/max saved completion |
 | `tests/unit/test_control_queue.py` | 控制命令队列 |
 | `tests/unit/test_module_entrypoint.py` | module entrypoint 调用 CLI main |
@@ -859,7 +868,6 @@ data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect
 9. `pyproject.toml` 当前未声明运行依赖列表；README 和 `setup.bash` 说明了 `ultralytics`、`rospkg` 等安装方式。
 10. Xtreme1 输出结构是当前唯一落地的保存节点，不代表框架已实现多种通用导出格式。
 11. demo 中的 YOLO 模型文件需要手工准备，仓库只提供 `demo/models/README.md`。
-12. 需求文档中提到的外部 ROS start 指令携带运行参数、发布结果到 ROS1 等内容，当前代码中未确认。
 
 ## 27. 关键文件索引
 
