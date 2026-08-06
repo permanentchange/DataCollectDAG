@@ -1,5 +1,5 @@
 output:
-  root_dir: DATA_COLLECT
+  root_dir: ~/DATA_COLLECT
 calibration:
   path: demo/calibration/sa1_cali.json
 ros:
@@ -110,7 +110,6 @@ runtime:
   main_frame_delay_ms: 50
   stop_timeout_sec: 2.0
 pipelines:
-
   init:
     description: Defualt trivial pipeline.
     main_source: front_wide_camera
@@ -129,7 +128,7 @@ pipelines:
         inputs:
           image: main_frame
         config:
-          model_path: demo/models/yolo_person_model.pt
+          model_path: demo/models/yolo26m.pt
           class_names:
             - person
             - car
@@ -140,7 +139,7 @@ pipelines:
             - 0.00001
             - 0.00001
           predict_conf: 0.00025
-          device: cuda
+          device: cpu
           imgsz: 640
           failure_policy: skip_sample
       - node_id: sync_top_lidar
@@ -581,8 +580,8 @@ pipelines:
       - [save_xtreme1, fps_control_marker]
       - [fps_control_marker, end]
 
-  xtreme1_collect:
-    description: Collect data and save it as the xtreme1 dataset format.
+  person_1fps:
+    description: Collect frames having person and save them as the xtreme1 dataset format.
     main_source: front_wide_camera
     stop_conditions:
       max_duration_sec: 600
@@ -600,15 +599,12 @@ pipelines:
         inputs:
           image: main_frame
         config:
-          model_path: demo/models/yolo_person_model.pt
+          model_path: demo/models/yolo26m.pt
           class_names:
             - person
-            - car
           confidence_thresholds:
             - 0.25
-            - 0.25
           min_area_ratios:
-            - 0.01
             - 0.01
           predict_conf: 0.25
           device: cuda

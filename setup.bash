@@ -1,7 +1,7 @@
 #!/bin/bash
 
 set -e
-
+PWD=$(pwd -P)
 MODE=$1
 
 if [ -z "$MODE" ]; then
@@ -52,5 +52,6 @@ esac
 
 echo "Installing current project..."
 pip install -e .
-
+echo "Downloading models..."
+mkdir -p demo/models && cd demo/models && python -c "from ultralytics import YOLO; m=YOLO('yolo26m.pt'); m=YOLO('yolo26l.pt')" && cd $PWD
 echo "Done."

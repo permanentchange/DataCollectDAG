@@ -48,14 +48,14 @@ def load_app_config(path: Path) -> AppConfig:
     _validate_runtime_config(runtime_config)
     return AppConfig(
         config_path=path.resolve(),
-        output_root_dir=Path(output.get("root_dir", "output")).resolve(),
+        output_root_dir=Path(output.get("root_dir", "output")).expanduser().resolve(),
         ros_node_name=str(ros.get("node_name", "data_collect_dag")),
         control=_parse_control_config(ros.get("control") or {}),
         topics=topics,
         cache_policies=cache_policies,
         runtime=runtime_config,
         pipelines=compiled_pipelines,
-        calibration_path=Path(calibration["path"]).resolve() if calibration.get("path") else None,
+        calibration_path=Path(calibration["path"]).expanduser().resolve() if calibration.get("path") else None,
     )
 
 
