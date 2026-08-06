@@ -163,5 +163,5 @@ class AppRuntime:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Data collection DAG demo runtime")
     parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--pipeline", required=True)
+    parser.add_argument("--pipeline", default='init')
     return parser
