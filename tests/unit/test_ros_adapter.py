@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import json
+import logging
 from types import SimpleNamespace
 
 import pytest
 
-from data_collect_dag.models import ControlConfig, TopicConfig
+from data_collect_dag.models import ControlConfig, StatusSnapshot, ToolState, TopicConfig
 from data_collect_dag.ros_adapter import RosAdapter
 
 
 class _FakeRospy:
     def __init__(self) -> None:
-        self.core = SimpleNamespace(is_initialized=lambda: False)
+        self.core = SimpleNamespace(is_initialized=lambda: True)
         self.init_calls = []
         self.subscribers = []
 
@@ -25,6 +27,10 @@ class _FakeRospy:
 class _StringMsg:
     def __init__(self, data: str = "") -> None:
         self.data = data
+
+
+def _skip_ros_master_wait(monkeypatch, adapter: RosAdapter) -> None:
+    monkeypatch.setattr(adapter, "_wait_for_ros_master", lambda: None)
 
 
 def test_start_fails_fast_when_any_topic_message_type_is_missing(monkeypatch):
@@ -46,6 +52,7 @@ def test_start_fails_fast_when_any_topic_message_type_is_missing(monkeypatch):
 
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_rospy", lambda: fake_rospy)
     monkeypatch.setattr("data_collect_dag.ros_adapter.resolve_message_class", fake_resolve_message_class)
+    _skip_ros_master_wait(monkeypatch, adapter)
 
     with pytest.raises(RuntimeError, match="failed to resolve ROS message types before starting subscriptions") as exc_info:
         adapter.start()
@@ -66,6 +73,7 @@ def test_control_topic_subscribes_to_single_json_control_topic(monkeypatch):
     fake_rospy = _FakeRospy()
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_rospy", lambda: fake_rospy)
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_std_msgs_string", lambda: _StringMsg)
+    _skip_ros_master_wait(monkeypatch, adapter)
 
     adapter.start()
 
@@ -90,6 +98,7 @@ def test_control_topic_dispatches_json_commands(monkeypatch):
     )
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_rospy", lambda: fake_rospy)
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_std_msgs_string", lambda: _StringMsg)
+    _skip_ros_master_wait(monkeypatch, adapter)
     adapter.start()
     callback = fake_rospy.subscribers[0][0][2]
 
@@ -135,9 +144,102 @@ def test_control_topic_ignores_invalid_json_commands(monkeypatch, payload):
     )
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_rospy", lambda: fake_rospy)
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_std_msgs_string", lambda: _StringMsg)
+    _skip_ros_master_wait(monkeypatch, adapter)
     adapter.start()
     callback = fake_rospy.subscribers[0][0][2]
 
     callback(_StringMsg(payload))
 
     assert calls == []
+
+
+def test_ros_master_probe_retries_until_available(monkeypatch):
+    adapter = RosAdapter({}, "data_collect_dag", ControlConfig())
+    attempts = []
+
+    def probe(_uri, _timeout_sec):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(adapter, "_probe_ros_master", probe)
+    monkeypatch.setattr("data_collect_dag.ros_adapter.ROS_MASTER_WAIT_TIMEOUT_SEC", 0.1)
+    monkeypatch.setattr("data_collect_dag.ros_adapter.time.sleep", lambda _seconds: None)
+
+    adapter._wait_for_ros_master()
+
+    assert len(attempts) == 2
+
+
+def test_ros_master_probe_fails_after_timeout(monkeypatch):
+    adapter = RosAdapter({}, "data_collect_dag", ControlConfig())
+    monkeypatch.setattr(adapter, "_probe_ros_master", lambda _uri, _timeout_sec: (_ for _ in ()).throw(OSError("connection refused")))
+    monkeypatch.setattr("data_collect_dag.ros_adapter.ROS_MASTER_WAIT_TIMEOUT_SEC", 0.0)
+
+    with pytest.raises(RuntimeError, match="ROS master.*roscore") as exc_info:
+        adapter._wait_for_ros_master()
+
+    assert "ROS_MASTER_URI" in str(exc_info.value)
+
+
+def test_start_checks_ros_master_before_importing_rospy(monkeypatch):
+    adapter = RosAdapter({}, "data_collect_dag", ControlConfig())
+    imported = []
+
+    def fail_master_check():
+        raise RuntimeError("master unavailable")
+
+    monkeypatch.setattr(adapter, "_wait_for_ros_master", fail_master_check)
+    monkeypatch.setattr("data_collect_dag.ros_adapter.import_rospy", lambda: imported.append(True))
+
+    with pytest.raises(RuntimeError, match="master unavailable"):
+        adapter.start()
+
+    assert imported == []
+
+
+def test_publish_status_keeps_existing_full_payload():
+    adapter = RosAdapter({}, "data_collect_dag", ControlConfig())
+    snapshot = StatusSnapshot(
+        tool_state=ToolState.RUNNING,
+        current_session_id="session-1",
+        current_pipeline_name="xtreme1_collect",
+        received_messages={"front_wide_camera": 4},
+        main_frame_events=4,
+        samples_saved=2,
+    )
+    adapter.bind_app(
+        status_callback=lambda: snapshot,
+        start_callback=lambda _pipeline: None,
+        stop_callback=lambda: None,
+        pause_callback=lambda: None,
+        resume_callback=lambda: None,
+    )
+
+    assert json.loads(adapter.publish_status()) == snapshot.to_dict()
+
+
+def test_runtime_summary_uses_main_source_count_and_logs_once_per_second(monkeypatch, caplog):
+    adapter = RosAdapter({}, "data_collect_dag", ControlConfig())
+    adapter.bind_session(SimpleNamespace(pipeline=SimpleNamespace(main_source="front_wide_camera")))
+    snapshot = StatusSnapshot(
+        tool_state=ToolState.RUNNING,
+        current_pipeline_name="xtreme1_collect",
+        received_messages={"front_wide_camera": 42, "top_lidar": 20},
+        samples_saved=3,
+        samples_skipped=7,
+        samples_failed=1,
+    )
+    clock = iter((10.0, 10.5, 11.0))
+    monkeypatch.setattr("data_collect_dag.ros_adapter.time.monotonic", lambda: next(clock))
+    caplog.set_level(logging.INFO, logger="data_collect_dag.ros")
+
+    adapter._maybe_log_runtime_summary(snapshot)
+    adapter._maybe_log_runtime_summary(snapshot)
+    adapter._maybe_log_runtime_summary(snapshot)
+
+    messages = [record.getMessage() for record in caplog.records if record.name == "data_collect_dag.ros"]
+    assert messages == [
+        "runtime state=RUNNING pipeline=xtreme1_collect received=42 saved=3 skipped=7 failed=1",
+        "runtime state=RUNNING pipeline=xtreme1_collect received=42 saved=3 skipped=7 failed=1",
+    ]

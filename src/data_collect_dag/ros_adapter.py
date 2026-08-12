@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 import threading
+import time
+from http.client import HTTPConnection
 from typing import Any, Callable, Dict, Optional
+from xmlrpc.client import ServerProxy, Transport
 
 from data_collect_dag.models import FrameLike, StatusSnapshot, TopicConfig
 from data_collect_dag.ros_messages import (
@@ -13,6 +18,21 @@ from data_collect_dag.ros_messages import (
     import_std_msgs_string,
     import_std_srvs_trigger,
 )
+
+
+ROS_MASTER_WAIT_TIMEOUT_SEC = 5.0
+ROS_MASTER_PROBE_TIMEOUT_SEC = 0.5
+ROS_MASTER_RETRY_INTERVAL_SEC = 0.2
+RUNTIME_SUMMARY_INTERVAL_SEC = 1.0
+
+
+class _TimeoutTransport(Transport):
+    def __init__(self, timeout_sec: float) -> None:
+        super().__init__()
+        self._timeout_sec = timeout_sec
+
+    def make_connection(self, host: str) -> HTTPConnection:
+        return HTTPConnection(host, timeout=self._timeout_sec)
 
 
 class RosAdapter:
@@ -32,6 +52,7 @@ class RosAdapter:
         self._publishers = {}
         self._services = []
         self._rospy = None
+        self._last_runtime_summary_log_monotonic: Optional[float] = None
         self._logger = logging.getLogger("data_collect_dag.ros")
 
     def bind_app(
@@ -57,9 +78,13 @@ class RosAdapter:
             self._session = None
 
     def start(self) -> None:
-        rospy = import_rospy()
+        rospy = sys.modules.get("rospy")
+        if rospy is None:
+            self._wait_for_ros_master()
+            rospy = import_rospy()
         self._rospy = rospy
         if not rospy.core.is_initialized():
+            self._wait_for_ros_master()
             rospy.init_node(self._ros_node_name, anonymous=False, disable_signals=True)
         self._logger.info("starting ROS adapter node=%s subscribed_topics=%s", self._ros_node_name, sorted(self._topics))
         resolved_message_classes = self._resolve_topic_message_classes()
@@ -112,9 +137,70 @@ class RosAdapter:
         self._publishers = {}
 
     def publish_status(self) -> str:
-        if self._status_callback is None:
+        snapshot = self._get_status_snapshot()
+        if snapshot is None:
             return "{}"
-        return json.dumps(self._status_callback().to_dict(), ensure_ascii=False)
+        return json.dumps(snapshot.to_dict(), ensure_ascii=False)
+
+    def _wait_for_ros_master(self) -> None:
+        master_uri = os.environ.get("ROS_MASTER_URI") or "http://localhost:11311"
+        deadline = time.monotonic() + ROS_MASTER_WAIT_TIMEOUT_SEC
+        last_error: Optional[Exception] = None
+        self._logger.info(
+            "waiting for ROS master ROS_MASTER_URI=%s timeout_sec=%s",
+            master_uri,
+            ROS_MASTER_WAIT_TIMEOUT_SEC,
+        )
+        while True:
+            remaining = deadline - time.monotonic()
+            probe_timeout_sec = max(0.001, min(ROS_MASTER_PROBE_TIMEOUT_SEC, remaining))
+            try:
+                self._probe_ros_master(master_uri, probe_timeout_sec)
+                self._logger.info("ROS master is available ROS_MASTER_URI=%s", master_uri)
+                return
+            except Exception as exc:
+                last_error = exc
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(ROS_MASTER_RETRY_INTERVAL_SEC, remaining))
+        raise RuntimeError(
+            "unable to contact ROS master within "
+            f"{ROS_MASTER_WAIT_TIMEOUT_SEC:g} seconds (ROS_MASTER_URI={master_uri}); "
+            "start it with 'roscore' and retry. "
+            f"Last error: {last_error}"
+        )
+
+    def _probe_ros_master(self, master_uri: str, timeout_sec: float) -> None:
+        proxy = ServerProxy(master_uri, transport=_TimeoutTransport(timeout_sec), allow_none=True)
+        code, message, _pid = proxy.getPid(self._ros_node_name)
+        if code != 1:
+            raise RuntimeError(f"master getPid failed: {message}")
+
+    def _get_status_snapshot(self) -> Optional[StatusSnapshot]:
+        if self._status_callback is None:
+            return None
+        return self._status_callback()
+
+    def _maybe_log_runtime_summary(self, snapshot: StatusSnapshot) -> None:
+        now = time.monotonic()
+        previous = self._last_runtime_summary_log_monotonic
+        if previous is not None and now - previous < RUNTIME_SUMMARY_INTERVAL_SEC:
+            return
+        self._last_runtime_summary_log_monotonic = now
+        session = self._session
+        pipeline = getattr(session, "pipeline", None)
+        main_source = getattr(pipeline, "main_source", None)
+        received = snapshot.received_messages.get(main_source, 0) if main_source else 0
+        self._logger.info(
+            "runtime state=%s pipeline=%s received=%s saved=%s skipped=%s failed=%s",
+            snapshot.tool_state.value,
+            snapshot.current_pipeline_name,
+            received,
+            snapshot.samples_saved,
+            snapshot.samples_skipped,
+            snapshot.samples_failed,
+        )
 
     def _resolve_topic_message_classes(self) -> Dict[str, Any]:
         resolved: Dict[str, Any] = {}
@@ -162,8 +248,11 @@ class RosAdapter:
         StringMsg = import_std_msgs_string()
         while not self._status_stop.is_set():
             msg = StringMsg()
-            msg.data = self.publish_status()
+            snapshot = self._get_status_snapshot()
+            msg.data = "{}" if snapshot is None else json.dumps(snapshot.to_dict(), ensure_ascii=False)
             self._publishers["status_topic"].publish(msg)
+            if snapshot is not None:
+                self._maybe_log_runtime_summary(snapshot)
             self._status_stop.wait(0.5)
 
     def _on_control_topic(self, msg: Any) -> None:
