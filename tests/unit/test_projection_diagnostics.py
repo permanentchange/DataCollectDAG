@@ -40,7 +40,7 @@ def test_projection_tool_color_range_defaults_and_clamps_values_at_boundaries():
     parser = module.build_parser()
 
     assert parser.parse_args(["session", "stem"]).color_range == (0.2, 20.0)
-    assert parser.parse_args(["session", "stem", "--color-range=-1,1"]).color_range == (-1.0, 1.0)
+    assert parser.parse_args(["session", "stem", "--color-range", "-0.1,0.1"]).color_range == (-0.1, 0.1)
     colors = height_to_rgb(np.array([0.1, 0.2, 10.0, 20.0, 21.0]), min_height=0.2, max_height=20.0)
     np.testing.assert_array_equal(colors[0], [0, 0, 255])
     np.testing.assert_array_equal(colors[-1], [255, 0, 0])

@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -21,6 +22,16 @@ COLOR_LABELS = {
     "z": "base_z_m",
     "d": "base_distance_m",
 }
+NEGATIVE_COLOR_RANGE = re.compile(r"^-[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?,-?[0-9]+(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?$")
+
+
+class ProjectionArgumentParser(argparse.ArgumentParser):
+    """Treat a negative comma-separated color range as an option argument."""
+
+    def _parse_optional(self, arg_string):
+        if NEGATIVE_COLOR_RANGE.match(arg_string):
+            return None
+        return super()._parse_optional(arg_string)
 
 
 def load_ascii_pcd(path: Path) -> np.ndarray:
@@ -136,7 +147,7 @@ def render_sample(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = ProjectionArgumentParser(description=__doc__)
     parser.add_argument("session_root", type=Path)
     parser.add_argument("stem", help="saved timestamp stem, without extension")
     parser.add_argument("--dataset-name", default="collect_demo")
