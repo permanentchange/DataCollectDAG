@@ -51,6 +51,16 @@ def test_frontcamera_pipeline_only_processes_front_wide_camera():
     assert set(pipeline.predecessors["save_xtreme1"]) == {"aggregate_pointclouds", "undistort_front_wide"}
 
 
+def test_demo_collection_pipelines_disable_undistort_debug_artifacts():
+    config = load_app_config(Path("demo/xtreme1_demo.yaml"))
+
+    for pipeline_name in ("lidar_camera_1fps", "lidar_frontcamera_1fps"):
+        pipeline = config.pipelines[pipeline_name]
+        undistort_nodes = [node for node in pipeline.nodes_by_id.values() if node.node_type == "image_undistort"]
+        assert undistort_nodes
+        assert all(node.config.get("write_debug_artifacts") is False for node in undistort_nodes)
+
+
 def test_control_config_rejects_legacy_control_topics(tmp_path):
     payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
     payload["ros"]["control"]["start_topic"] = "/data_collect/start"

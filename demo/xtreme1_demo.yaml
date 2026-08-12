@@ -376,7 +376,7 @@ pipelines:
           image: front_wide_camera_undistorted
         config:
           source: front_wide_camera
-          write_debug_artifacts: true
+          write_debug_artifacts: false
       - node_id: undistort_front_fisheye
         type: image_undistort
         inputs:
@@ -385,7 +385,7 @@ pipelines:
           image: front_fisheye_camera_undistorted
         config:
           source: front_fisheye_camera
-          write_debug_artifacts: true
+          write_debug_artifacts: false
       - node_id: undistort_rear_fisheye
         type: image_undistort
         inputs:
@@ -394,7 +394,7 @@ pipelines:
           image: rear_fisheye_camera_undistorted
         config:
           source: rear_fisheye_camera
-          write_debug_artifacts: true
+          write_debug_artifacts: false
       - node_id: undistort_left_fisheye
         type: image_undistort
         inputs:
@@ -403,7 +403,7 @@ pipelines:
           image: left_fisheye_camera_undistorted
         config:
           source: left_fisheye_camera
-          write_debug_artifacts: true
+          write_debug_artifacts: false
       - node_id: undistort_right_fisheye
         type: image_undistort
         inputs:
@@ -412,7 +412,7 @@ pipelines:
           image: right_fisheye_camera_undistorted
         config:
           source: right_fisheye_camera
-          write_debug_artifacts: true
+          write_debug_artifacts: false
       - node_id: sync_top_lidar
         type: time_sync
         inputs:
@@ -655,7 +655,7 @@ pipelines:
           image: front_wide_camera_undistorted
         config:
           source: front_wide_camera
-          write_debug_artifacts: true
+          write_debug_artifacts: false
       - node_id: sync_top_lidar
         type: time_sync
         inputs:
