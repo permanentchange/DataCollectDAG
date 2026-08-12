@@ -1,29 +1,13 @@
 from pathlib import Path
 
 from data_collect_dag.app import AppRuntime
-from data_collect_dag.nodes import vision
 from data_collect_dag.ros_adapter import RosAdapter
 from data_collect_dag.session import SessionManager
 from data_collect_dag.status import StatusManager
 
-
-class _FakeYOLO:
-    def __init__(self, model_path: str) -> None:
-        self.model_path = model_path
-
-    def predict(self, **kwargs):
-        return []
-
-
 def test_session_manager_start_stop_replace(tmp_path, monkeypatch):
-    runtime = AppRuntime(Path("demo/xtreme1_demo.yaml"), "xtreme1_collect")
-    model_path = tmp_path / "person.pt"
-    model_path.write_text("fake-model", encoding="utf-8")
-    gate_config = runtime.app_config.pipelines["xtreme1_collect"].nodes_by_id["front_yolo_gate"].config
-    gate_config["model_path"] = str(model_path)
-    gate_config["device"] = "cpu"
+    runtime = AppRuntime(Path("demo/xtreme1_demo.yaml"), "lidar_frontcamera_1fps")
     runtime.app_config.output_root_dir = tmp_path
-    monkeypatch.setattr(vision, "_load_yolo_class", lambda: _FakeYOLO)
     runtime.session_manager = SessionManager(
         runtime.app_config,
         runtime.calibration,
@@ -31,8 +15,8 @@ def test_session_manager_start_stop_replace(tmp_path, monkeypatch):
         StatusManager(),
         command_callback=lambda command: None,
     )
-    session1 = runtime.session_manager.start("xtreme1_collect")
+    session1 = runtime.session_manager.start("lidar_frontcamera_1fps")
     assert session1.session_root.exists()
-    session2 = runtime.session_manager.start("xtreme1_collect")
+    session2 = runtime.session_manager.start("lidar_frontcamera_1fps")
     assert session2.session_id != session1.session_id
     runtime.session_manager.stop()

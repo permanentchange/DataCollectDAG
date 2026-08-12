@@ -239,6 +239,8 @@ def _validate_node_config(pipeline_name: str, node_config: NodeConfig, topics: D
             )
     elif node_config.node_type == "yolo_gate":
         _validate_yolo_gate_config(pipeline_name, node_config)
+    elif node_config.node_type == "image_undistort":
+        _validate_image_undistort_config(pipeline_name, node_config, topics)
 
 
 def _validate_non_empty_gate_id(pipeline_name: str, node_config: NodeConfig) -> None:
@@ -279,6 +281,23 @@ def _validate_yolo_gate_config(pipeline_name: str, node_config: NodeConfig) -> N
     failure_policy = str(node_config.config.get("failure_policy", "skip_sample"))
     if failure_policy != "skip_sample":
         raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} unsupported failure_policy: {failure_policy}")
+
+
+def _validate_image_undistort_config(
+    pipeline_name: str, node_config: NodeConfig, topics: Dict[str, TopicConfig]
+) -> None:
+    source = str(node_config.config.get("source", "")).strip()
+    if not source:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing source")
+    topic = topics.get(source)
+    if topic is None:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} references unknown source topic_key: {source}")
+    if topic.role != "image":
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} source must have image role: {source}")
+    if "image" not in node_config.inputs:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing image input")
+    if "image" not in node_config.outputs:
+        raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} missing image output")
 
 
 def _validate_non_empty_string_list(pipeline_name: str, node_config: NodeConfig, key: str) -> List[str]:

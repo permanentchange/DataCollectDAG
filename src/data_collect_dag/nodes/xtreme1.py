@@ -33,13 +33,13 @@ class Xtreme1SaveNode(BaseNode):
     def setup(self) -> None:
         self._dataset_name = str(self.config.get("dataset_name", "collect_demo"))
         self._save_root = self.session.session_root / "xtreme1" / self._dataset_name
+        self._camera_topics = _resolve_camera_topics(self.config.get("camera_topics"), self.session.app_config.topics)
         (self._save_root / "camera_config").mkdir(parents=True, exist_ok=True)
         (self._save_root / "lidar_point_cloud_0").mkdir(parents=True, exist_ok=True)
-        for index in range(len(CAMERA_TOPIC_ORDER)):
+        for topic_key in self._camera_topics:
+            index = CAMERA_TOPIC_ORDER.index(topic_key)
             (self._save_root / f"camera_image_{index}").mkdir(parents=True, exist_ok=True)
-        for topic_key in CAMERA_TOPIC_ORDER:
-            if topic_key not in self.session.app_config.topics:
-                continue
+        for topic_key in self._camera_topics:
             ros_topic = self.session.app_config.topics[topic_key].topic
             if ros_topic not in self.session.calibration["images"]:
                 raise ValueError(f"missing camera calibration for {topic_key} -> {ros_topic}")
@@ -64,22 +64,27 @@ class Xtreme1SaveNode(BaseNode):
         saved_images: List[str] = []
         saved_camera_topics: List[str] = []
         camera_configs: List[Dict[str, Any]] = []
-        for index, topic_key in enumerate(CAMERA_TOPIC_ORDER):
-            if topic_key not in self.session.app_config.topics:
-                continue
+        for topic_key in self._camera_topics:
+            index = CAMERA_TOPIC_ORDER.index(topic_key)
             input_name = CAMERA_INPUT_NAME_BY_TOPIC[topic_key]
             ros_topic = self.session.app_config.topics[topic_key].topic
             image = None
             if input_name in self.inputs:
                 input_key = self.inputs[input_name]
-                if sample.has(input_key):
-                    image = ensure_image_frame_decoded(sample.get(input_key))
+                corrected_key = f"{topic_key}_undistorted"
+                selected_key = corrected_key if sample.has(corrected_key) else input_key
+                if sample.has(selected_key):
+                    image = ensure_image_frame_decoded(sample.get(selected_key))
                     image_path = self._save_root / f"camera_image_{index}" / f"{stem}.jpg"
                     assert image.image_bgr is not None
                     save_jpg(image_path, image.image_bgr)
                     saved_images.append(str(image_path))
                     saved_camera_topics.append(topic_key)
-            camera_configs.append(_build_camera_config(self.session.calibration["images"][ros_topic], image))
+            camera_params = dict(self.session.calibration["images"][ros_topic])
+            corrected_params = sample.metadata.get("undistort_camera_params", {}).get(topic_key)
+            if corrected_params is not None:
+                camera_params.update(corrected_params)
+            camera_configs.append(_build_camera_config(camera_params, image))
         pcd_path = self._save_root / "lidar_point_cloud_0" / f"{stem}.pcd"
         assert pointcloud.points_xyz is not None
         save_ascii_pcd(pcd_path, pointcloud.points_xyz)
@@ -104,6 +109,23 @@ class Xtreme1SaveNode(BaseNode):
             config_path,
         )
         return self.ok()
+
+
+def _resolve_camera_topics(configured_topics: Any, available_topics: Dict[str, Any]) -> List[str]:
+    if configured_topics is None:
+        return [topic_key for topic_key in CAMERA_TOPIC_ORDER if topic_key in available_topics]
+    if not isinstance(configured_topics, list) or not configured_topics:
+        raise ValueError("camera_topics must be a non-empty list")
+    selected_topics: List[str] = []
+    for topic_key in configured_topics:
+        if not isinstance(topic_key, str) or topic_key not in CAMERA_INPUT_NAME_BY_TOPIC:
+            raise ValueError(f"unsupported camera topic: {topic_key}")
+        if topic_key not in available_topics:
+            raise ValueError(f"configured camera topic is missing from ros.topics: {topic_key}")
+        if topic_key in selected_topics:
+            raise ValueError(f"duplicate camera topic: {topic_key}")
+        selected_topics.append(topic_key)
+    return selected_topics
 
 
 def _build_camera_config(camera_params: Dict[str, Any], image) -> Dict[str, Any]:

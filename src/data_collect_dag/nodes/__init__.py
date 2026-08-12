@@ -1,4 +1,5 @@
 from data_collect_dag.nodes.base import BaseNode
+from data_collect_dag.nodes.image_undistort import ImageUndistortNode
 from data_collect_dag.nodes.common import (
     AggregatePointCloudNode,
     EndNode,
@@ -22,6 +23,7 @@ __all__ = [
     "EndNode",
     "FpsGuardNode",
     "FpsMarkerNode",
+    "ImageUndistortNode",
     "LocalizationRangeNode",
     "MultiTimeSyncNode",
     "PointCloudMotionCompensationNode",
