@@ -7,7 +7,7 @@ import signal
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from data_collect_dag.config import load_app_config
 from data_collect_dag.control import ControlCommand, ControlCommandQueue
@@ -52,8 +52,6 @@ class AppRuntime:
         self._stop_event = threading.Event()
         self._control_stop_event = threading.Event()
         self._control_thread = threading.Thread(target=self._control_loop, name="control-thread", daemon=True)
-        self._initial_start_event = threading.Event()
-        self._initial_start_error: Optional[Exception] = None
         self.ros_adapter.bind_app(
             status_callback=self.status_manager.snapshot,
             start_callback=self._handle_start_command,
@@ -68,13 +66,7 @@ class AppRuntime:
         self.logger.info("starting app runtime config=%s pipeline=%s", self.app_config.config_path, self.pipeline_name)
         self.ros_adapter.start()
         self._control_thread.start()
-        self._submit_command(ControlCommand(kind="start", pipeline_name=self.pipeline_name, reason="initial_start"))
-        self._initial_start_event.wait()
-        if self._initial_start_error is not None:
-            self._control_stop_event.set()
-            self._control_thread.join(timeout=1.0)
-            self.ros_adapter.stop()
-            raise self._initial_start_error
+        self._submit_command(ControlCommand(kind="start", pipeline_name=self.pipeline_name))
         while not self._stop_event.is_set():
             time.sleep(0.2)
         self._control_stop_event.set()
@@ -118,17 +110,11 @@ class AppRuntime:
             except Exception as exc:
                 self.logger.exception("control command failed kind=%s", command.kind)
                 self.status_manager.set_last_error(str(exc))
-                if command.reason == "initial_start":
-                    self._initial_start_error = exc
-                    self._initial_start_event.set()
 
     def _dispatch_command(self, command: ControlCommand) -> None:
         if command.kind == "start":
-            try:
-                self.session_manager.start(command.pipeline_name or self.pipeline_name)
-            finally:
-                if command.reason == "initial_start":
-                    self._initial_start_event.set()
+            self.session_manager.start(command.pipeline_name or self.pipeline_name)
+            self.status_manager.set_last_error(None)
             return
         if command.kind == "stop":
             self.session_manager.stop(
