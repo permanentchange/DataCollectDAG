@@ -37,6 +37,73 @@ def test_load_demo_config():
     assert pipeline.stop_conditions.max_saved_samples is None
 
 
+def test_load_pipeline_topic_precheck_config(tmp_path):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    pipeline = payload["pipelines"]["init"]
+    pipeline["topics"] = ["front_wide_camera", "top_lidar"]
+    pipeline["time_delay_ms"] = 1000
+    path = tmp_path / "topic_precheck.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_app_config(path)
+
+    assert config.pipelines["init"].topics == ["front_wide_camera", "top_lidar"]
+    assert config.pipelines["init"].time_delay_ms == 1000
+
+
+@pytest.mark.parametrize(
+    "topics,error",
+    [
+        ([], "topics must be a non-empty list"),
+        (["top_lidar", "top_lidar"], "topics must not contain duplicates"),
+        (["unknown_topic"], "unknown topic_key"),
+    ],
+)
+def test_pipeline_topic_precheck_rejects_invalid_topics(tmp_path, topics, error):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    pipeline = payload["pipelines"]["init"]
+    pipeline["topics"] = topics
+    pipeline["time_delay_ms"] = 1000
+    path = tmp_path / "invalid_topic_precheck.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=error):
+        load_app_config(path)
+
+
+def test_pipeline_topic_precheck_requires_time_delay(tmp_path):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    payload["pipelines"]["init"]["topics"] = ["top_lidar"]
+    path = tmp_path / "missing_topic_precheck_delay.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="time_delay_ms"):
+        load_app_config(path)
+
+
+@pytest.mark.parametrize("time_delay_ms", [0, -1, 1.5, "1000", True])
+def test_pipeline_topic_precheck_requires_positive_integer_time_delay(tmp_path, time_delay_ms):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    pipeline = payload["pipelines"]["init"]
+    pipeline["topics"] = ["top_lidar"]
+    pipeline["time_delay_ms"] = time_delay_ms
+    path = tmp_path / "invalid_topic_precheck_delay.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="time_delay_ms"):
+        load_app_config(path)
+
+
+def test_pipeline_rejects_time_delay_without_topics(tmp_path):
+    payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
+    payload["pipelines"]["init"]["time_delay_ms"] = 1000
+    path = tmp_path / "topic_precheck_delay_without_topics.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="topics"):
+        load_app_config(path)
+
+
 def test_frontcamera_pipeline_only_processes_front_wide_camera():
     config = load_app_config(Path("demo/xtreme1_demo.yaml"))
     pipeline = config.pipelines["lidar_frontcamera_1fps"]

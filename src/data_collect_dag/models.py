@@ -188,6 +188,8 @@ class PipelineDefinition:
     start_node_id: str
     end_node_id: str
     stop_conditions: "StopConditions" = None
+    topics: List[str] = field(default_factory=list)
+    time_delay_ms: Optional[int] = None
 
 
 @dataclass

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
 from typing import Optional
+
+import pytest
 
 from data_collect_dag.control import ControlCommand
 from data_collect_dag.models import AppConfig, CachePolicy, ControlConfig, MainFrameEvent, PipelineDefinition, RuntimeConfig, StopConditions, TopicConfig
@@ -28,9 +31,15 @@ class _CommandCollector:
             self.items.append(command)
 
 
-def _make_session(tmp_path: Path, stop_conditions: Optional[StopConditions] = None):
+def _make_session(
+    tmp_path: Path,
+    stop_conditions: Optional[StopConditions] = None,
+    precheck_topics=None,
+    time_delay_ms: Optional[int] = None,
+):
     topics = {
         "front_wide_camera": TopicConfig("front_wide_camera", "/front", "sensor_msgs/Image", "image", "front_wide_camera"),
+        "top_lidar": TopicConfig("top_lidar", "/lidar", "sensor_msgs/PointCloud2", "pointcloud", "top_lidar"),
     }
     app_config = AppConfig(
         config_path=tmp_path / "config.yaml",
@@ -38,7 +47,7 @@ def _make_session(tmp_path: Path, stop_conditions: Optional[StopConditions] = No
         ros_node_name="data_collect_dag",
         control=ControlConfig(),
         topics=topics,
-        cache_policies={"front_wide_camera": CachePolicy(10, 1.0)},
+        cache_policies={topic_key: CachePolicy(10, 1.0) for topic_key in topics},
         runtime=RuntimeConfig(main_frame_queue_size=2),
         pipelines={},
         calibration_path=None,
@@ -52,17 +61,73 @@ def _make_session(tmp_path: Path, stop_conditions: Optional[StopConditions] = No
         start_node_id="start",
         end_node_id="end",
         stop_conditions=stop_conditions or StopConditions(),
+        topics=list(precheck_topics or []),
+        time_delay_ms=time_delay_ms,
     )
     collector = _CommandCollector()
     session = SessionRuntime(
         app_config,
         pipeline,
         calibration={},
-        ros_adapter=RosAdapter({}, "data_collect_dag", ControlConfig()),
+        ros_adapter=RosAdapter(topics, "data_collect_dag", ControlConfig()),
         status_manager=StatusManager(),
         command_callback=collector,
     )
     return session, collector
+
+
+def test_topic_precheck_failure_stops_session_setup_before_building_nodes(tmp_path):
+    session, _collector = _make_session(
+        tmp_path,
+        precheck_topics=["top_lidar", "front_wide_camera"],
+        time_delay_ms=25,
+    )
+
+    def wait_for_topic_messages(topic_keys, timeout_ms):
+        assert topic_keys == ["top_lidar", "front_wide_camera"]
+        assert timeout_ms == 25
+        return ["top_lidar", "front_wide_camera"]
+
+    session.ros_adapter.wait_for_topic_messages = wait_for_topic_messages
+    build_called = []
+    session._build_nodes = lambda: build_called.append(True)
+    expected_error = "topic precheck timed out after 25 ms; missing topics: front_wide_camera, top_lidar"
+
+    with pytest.raises(RuntimeError, match="topic precheck timed out") as exc_info:
+        session.start()
+
+    assert str(exc_info.value) == expected_error
+    assert build_called == []
+    snapshot = session.status_manager.snapshot()
+    assert snapshot.tool_state.value == "IDLE"
+    assert snapshot.recent_session_status.value == "FAILED"
+    assert snapshot.last_error == expected_error
+    summary = json.loads((session.session_root / "session_summary.json").read_text(encoding="utf-8"))
+    assert summary["end_status"] == "FAILED"
+    assert summary["end_reason"] == "setup_failed"
+    assert summary["last_error"] == expected_error
+
+
+def test_topic_precheck_success_continues_normal_session_start(tmp_path):
+    session, _collector = _make_session(
+        tmp_path,
+        precheck_topics=["front_wide_camera", "top_lidar"],
+        time_delay_ms=100,
+    )
+    wait_calls = []
+
+    def wait_for_topic_messages(topic_keys, timeout_ms):
+        wait_calls.append((list(topic_keys), timeout_ms))
+        return []
+
+    session.ros_adapter.wait_for_topic_messages = wait_for_topic_messages
+
+    session.start()
+    try:
+        assert wait_calls == [(["front_wide_camera", "top_lidar"], 100)]
+        assert session.status_manager.snapshot().tool_state.value == "RUNNING"
+    finally:
+        session.stop()
 
 
 def test_enqueue_main_frame_event_drops_oldest(tmp_path):

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +33,69 @@ class _StringMsg:
 
 def _skip_ros_master_wait(monkeypatch, adapter: RosAdapter) -> None:
     monkeypatch.setattr(adapter, "_wait_for_ros_master", lambda: None)
+
+
+def _message_tracking_adapter():
+    return RosAdapter(
+        {
+            "front_camera": TopicConfig("front_camera", "/front", "sensor_msgs/Image", "image", "front_camera"),
+            "top_lidar": TopicConfig("top_lidar", "/lidar", "sensor_msgs/PointCloud2", "pointcloud", "top_lidar"),
+        },
+        "data_collect_dag",
+        ControlConfig(),
+    )
+
+
+def test_topic_precheck_ignores_messages_received_before_wait(monkeypatch):
+    adapter = _message_tracking_adapter()
+    monkeypatch.setattr("data_collect_dag.ros_adapter.frame_from_ros_message", lambda *_args: object())
+    adapter._make_topic_callback("front_camera", adapter._topics["front_camera"])(object())
+
+    missing = adapter.wait_for_topic_messages(["front_camera"], timeout_ms=10)
+
+    assert missing == ["front_camera"]
+
+
+def test_topic_precheck_accepts_new_raw_messages_even_when_frame_conversion_fails(monkeypatch):
+    adapter = _message_tracking_adapter()
+    monkeypatch.setattr(
+        "data_collect_dag.ros_adapter.frame_from_ros_message",
+        lambda *_args: (_ for _ in ()).throw(ValueError("invalid frame")),
+    )
+    result = {}
+
+    waiter = threading.Thread(
+        target=lambda: result.setdefault(
+            "missing", adapter.wait_for_topic_messages(["front_camera", "top_lidar"], timeout_ms=500)
+        )
+    )
+    waiter.start()
+    time.sleep(0.02)
+    adapter._make_topic_callback("front_camera", adapter._topics["front_camera"])(object())
+    adapter._make_topic_callback("top_lidar", adapter._topics["top_lidar"])(object())
+    waiter.join(timeout=1.0)
+
+    assert waiter.is_alive() is False
+    assert result["missing"] == []
+
+
+def test_topic_precheck_timeout_returns_only_topics_without_new_messages(monkeypatch):
+    adapter = _message_tracking_adapter()
+    monkeypatch.setattr("data_collect_dag.ros_adapter.frame_from_ros_message", lambda *_args: object())
+    result = {}
+
+    waiter = threading.Thread(
+        target=lambda: result.setdefault(
+            "missing", adapter.wait_for_topic_messages(["front_camera", "top_lidar"], timeout_ms=80)
+        )
+    )
+    waiter.start()
+    time.sleep(0.02)
+    adapter._make_topic_callback("front_camera", adapter._topics["front_camera"])(object())
+    waiter.join(timeout=1.0)
+
+    assert waiter.is_alive() is False
+    assert result["missing"] == ["top_lidar"]
 
 
 def test_start_fails_fast_when_any_topic_message_type_is_missing(monkeypatch):

@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 import math
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import yaml
 
@@ -153,6 +153,7 @@ def _parse_pipelines(raw_pipelines: Dict[str, Any], topics: Dict[str, TopicConfi
         if len(end_nodes) != 1:
             raise ConfigError(f"pipeline {name} must contain exactly one end node")
         _validate_pipeline_graph(name, nodes_by_id, predecessors, successors, start_nodes[0], end_nodes[0])
+        precheck_topics, time_delay_ms = _parse_pipeline_topic_precheck(name, payload, topics)
         pipelines[name] = PipelineDefinition(
             name=name,
             main_source=main_source,
@@ -162,8 +163,42 @@ def _parse_pipelines(raw_pipelines: Dict[str, Any], topics: Dict[str, TopicConfi
             start_node_id=start_nodes[0],
             end_node_id=end_nodes[0],
             stop_conditions=_parse_stop_conditions(name, payload.get("stop_conditions") or {}),
+            topics=precheck_topics,
+            time_delay_ms=time_delay_ms,
         )
     return pipelines
+
+
+def _parse_pipeline_topic_precheck(
+    pipeline_name: str, payload: Dict[str, Any], configured_topics: Dict[str, TopicConfig]
+) -> Tuple[List[str], Optional[int]]:
+    has_topics = "topics" in payload
+    has_time_delay = "time_delay_ms" in payload
+    if not has_topics and not has_time_delay:
+        return [], None
+    if not has_topics:
+        raise ConfigError(f"pipeline {pipeline_name} time_delay_ms requires topics")
+
+    raw_topics = payload["topics"]
+    if not isinstance(raw_topics, list) or not raw_topics:
+        raise ConfigError(f"pipeline {pipeline_name} topics must be a non-empty list")
+    topic_keys = []
+    for raw_topic in raw_topics:
+        if not isinstance(raw_topic, str) or not raw_topic.strip():
+            raise ConfigError(f"pipeline {pipeline_name} topics must contain non-empty topic keys")
+        topic_key = raw_topic.strip()
+        if topic_key not in configured_topics:
+            raise ConfigError(f"pipeline {pipeline_name} topics references unknown topic_key: {topic_key}")
+        topic_keys.append(topic_key)
+    if len(set(topic_keys)) != len(topic_keys):
+        raise ConfigError(f"pipeline {pipeline_name} topics must not contain duplicates")
+
+    if not has_time_delay:
+        raise ConfigError(f"pipeline {pipeline_name} topics requires time_delay_ms")
+    time_delay_ms = payload["time_delay_ms"]
+    if isinstance(time_delay_ms, bool) or not isinstance(time_delay_ms, int) or time_delay_ms <= 0:
+        raise ConfigError(f"pipeline {pipeline_name} time_delay_ms must be a positive integer")
+    return topic_keys, time_delay_ms
 
 
 def _parse_stop_conditions(pipeline_name: str, payload: Dict[str, Any]) -> StopConditions:

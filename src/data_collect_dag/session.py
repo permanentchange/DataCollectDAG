@@ -119,6 +119,7 @@ class SessionRuntime:
         self.session_root.mkdir(parents=True, exist_ok=False)
         self._log_handler = attach_session_log_file(self.session_root / "debug.log")
         try:
+            self._precheck_topics()
             self._build_nodes()
             self._active = True
             self._accepting_frames = True
@@ -189,6 +190,19 @@ class SessionRuntime:
             detach_handler(self._log_handler)
             self._log_handler = None
             raise
+
+    def _precheck_topics(self) -> None:
+        if not self.pipeline.topics:
+            return
+        missing_topics = self.ros_adapter.wait_for_topic_messages(
+            self.pipeline.topics,
+            self.pipeline.time_delay_ms,
+        )
+        if missing_topics:
+            missing = ", ".join(sorted(missing_topics))
+            raise RuntimeError(
+                f"topic precheck timed out after {self.pipeline.time_delay_ms} ms; missing topics: {missing}"
+            )
 
     def stop(self, *, reason: str = "external_stop", status: RecentSessionStatus = RecentSessionStatus.STOPPED) -> None:
         self.logger.info("stopping session session_id=%s reason=%s status=%s", self.session_id, reason, status.value)

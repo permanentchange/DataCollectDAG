@@ -34,7 +34,7 @@ DataCollectDAG 的 pipeline、ROS 输入 topic、缓存策略、运行参数和�
 data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect
 ```
 
-运行时会启动 ROS adapter，并自动启动 CLI 参数指定的初始 pipeline。之后外部系统可以继续通过控制 topic 发送命令。如果在已有活动 session 时再次发送 `start`，当前 session 会先停止，新 session 再启动。
+运行时会启动 ROS adapter，并自动启动 CLI 参数指定的 pipeline。pipeline 可选配置 `topics` 和 `time_delay_ms`：每次 start 后，所有指定 topic 必须在该统一窗口内分别到达至少一条新消息，才会进入 DAG node setup；超时错误会在 `last_error` 中列出缺失 topic。该 start 与之后通过控制 topic 发送的 start 使用相同的错误处理：pipeline 名称、topic 前置检查或 setup 错误只会使当前命令失败，服务仍会继续接收控制命令；后续 start 成功后会清空旧的 `last_error`。如果在已有活动 session 时再次发送 `start`，当前 session 会先停止，新 session 再启动。
 
 ## 3. ROS 配置
 

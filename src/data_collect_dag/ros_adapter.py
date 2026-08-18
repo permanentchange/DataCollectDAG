@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from http.client import HTTPConnection
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from xmlrpc.client import ServerProxy, Transport
 
 from data_collect_dag.models import FrameLike, StatusSnapshot, TopicConfig
@@ -53,6 +53,8 @@ class RosAdapter:
         self._services = []
         self._rospy = None
         self._last_runtime_summary_log_monotonic: Optional[float] = None
+        self._topic_message_condition = threading.Condition()
+        self._topic_message_counts: Dict[str, int] = {topic_key: 0 for topic_key in topics}
         self._logger = logging.getLogger("data_collect_dag.ros")
 
     def bind_app(
@@ -76,6 +78,23 @@ class RosAdapter:
     def unbind_session(self, session: Any) -> None:
         if self._session is session:
             self._session = None
+
+    def wait_for_topic_messages(self, topic_keys: Sequence[str], timeout_ms: int) -> List[str]:
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        with self._topic_message_condition:
+            initial_counts = {topic_key: self._topic_message_counts.get(topic_key, 0) for topic_key in topic_keys}
+            while True:
+                missing = [
+                    topic_key
+                    for topic_key in topic_keys
+                    if self._topic_message_counts.get(topic_key, 0) <= initial_counts[topic_key]
+                ]
+                if not missing:
+                    return []
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return missing
+                self._topic_message_condition.wait(timeout=remaining)
 
     def start(self) -> None:
         rospy = sys.modules.get("rospy")
@@ -230,6 +249,9 @@ class RosAdapter:
 
     def _make_topic_callback(self, topic_key: str, topic_config: TopicConfig):
         def callback(msg: Any) -> None:
+            with self._topic_message_condition:
+                self._topic_message_counts[topic_key] = self._topic_message_counts.get(topic_key, 0) + 1
+                self._topic_message_condition.notify_all()
             try:
                 frame = frame_from_ros_message(topic_key, topic_config.topic, topic_config.role, topic_config.sensor_name, msg)
                 self.ingest_frame(topic_key, frame)

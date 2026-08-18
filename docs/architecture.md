@@ -143,7 +143,7 @@ flowchart TD
   R --> S["start sample workers and optional duration monitor"]
 ```
 
-`AppRuntime.__init__` 会立即加载 YAML 配置和标定文件；如果 `calibration.path` 缺失，会抛出 `ValueError("calibration.path is required")`。`AppRuntime.run()` 先启动 ROS adapter，再启动控制线程，最后投递初始 start 命令。初始 start 如果失败，`AppRuntime._control_loop` 会记录 `_initial_start_error`，`run()` 停止控制线程和 ROS adapter 后重新抛出该异常。
+`AppRuntime.__init__` 会立即加载 YAML 配置和标定文件；如果 `calibration.path` 缺失，会抛出 `ValueError("calibration.path is required")`。`AppRuntime.run()` 先启动 ROS adapter，再启动控制线程，最后投递第一个 start 命令。第一个 start 与后续 ROS start 命令使用相同的异常边界：失败时记录 `last_error`，但控制线程、ROS adapter 和进程继续运行并等待后续命令；后续 start 成功时清空旧的 `last_error`。
 
 事实依据：`src/data_collect_dag/app.py::AppRuntime.__init__`、`src/data_collect_dag/app.py::AppRuntime.run`、`src/data_collect_dag/session.py::SessionManager.start`、`src/data_collect_dag/session.py::SessionRuntime.start`。
 
@@ -191,6 +191,8 @@ runtime:
 pipelines:
   pipeline_name:
     main_source: topic_key
+    topics: [topic_key_a, topic_key_b]
+    time_delay_ms: 1000
     stop_conditions:
       max_duration_sec: 600
       max_saved_samples: 1000
@@ -216,6 +218,8 @@ pipelines:
 | `runtime.main_frame_queue_size` | `20` | `load_app_config` |
 | `runtime.main_frame_delay_ms` | `0` | `load_app_config` |
 | `runtime.stop_timeout_sec` | `5.0` | `load_app_config` |
+| `PipelineDefinition.topics` | `[]`（跳过启动前 topic 检查） | `_parse_pipeline_topic_precheck` |
+| `PipelineDefinition.time_delay_ms` | `None` | `_parse_pipeline_topic_precheck` |
 | `NodeConfig.inputs`、`outputs`、`config` | `{}` | `_parse_pipelines` |
 | `TopicConfig.sensor_name` | `topic_key` | `_parse_topics` |
 
@@ -236,7 +240,8 @@ pipelines:
 13. `time_sync.source`、`multi_time_sync.sources`、`pointcloud_motion_compensation.localization_source` 必须引用已声明 topic。
 14. `fps_guard` 和 `fps_marker` 必须配置非空 `gate_id`；`fps_guard.max_fps` 必须存在且大于 0。
 15. `yolo_gate` 必须配置 `model_path`、`image` 输入、`class_names`、`confidence_thresholds`、`min_area_ratios`、`predict_conf`；三个数组长度必须一致，阈值范围为 `[0, 1]`，且 `predict_conf <= min(confidence_thresholds)`；`failure_policy` 当前只接受 `skip_sample`。
-16. `stop_conditions.max_duration_sec` 和 `max_saved_samples` 如配置，必须大于 0。
+16. pipeline 配置 `topics` 时必须是由 `ros.topics` key 构成的非空、无重复列表，并同时配置正整数 `time_delay_ms`；两个字段都不配置时跳过前置检查。
+17. `stop_conditions.max_duration_sec` 和 `max_saved_samples` 如配置，必须大于 0。
 
 当前配置解析不会在 `load_app_config` 阶段验证所有节点类型是否存在于 `NODE_TYPES`。未知节点类型会在 `SessionRuntime._build_nodes()` 通过 `NODE_TYPES[node_config.node_type]` 暴露为运行期错误。
 
@@ -250,7 +255,8 @@ flowchart TD
   Parse --> Validate["_validate_pipeline_graph"]
   Validate --> PipelineDef["PipelineDefinition"]
   PipelineDef --> SessionStart["SessionRuntime.start"]
-  SessionStart --> Build["_build_nodes"]
+  SessionStart --> Precheck["optional topic message precheck"]
+  Precheck --> Build["_build_nodes"]
   Build --> Registry["NODE_TYPES"]
   Registry --> NodeInstances["BaseNode subclasses"]
   NodeInstances --> Setup["node.setup() in config order"]
@@ -405,7 +411,7 @@ teardown()
 | `CachePolicy` | 单 topic cache 的 `max_frames` 和 `max_age_sec` |
 | `RuntimeConfig` | worker、队列、delay、stop timeout、debug 配置 |
 | `ControlConfig` | ROS 控制 topic/service 名称 |
-| `PipelineDefinition` | pipeline 名称、main_source、节点、边、start/end、stop 条件 |
+| `PipelineDefinition` | pipeline 名称、main_source、可选 topic 前置检查、节点、边、start/end、stop 条件 |
 | `NodeConfig` | node_id、node_type、inputs、outputs、config |
 | `FrameMeta` | topic、sensor、role、source/receive timestamp、frame_id |
 | `ImageFrame` | 图像 frame，支持延迟解码 |
@@ -498,6 +504,7 @@ flowchart TD
   Resolve --> PubStatus["optional status publisher thread"]
   Resolve --> Services["optional Trigger services"]
   SubData --> Callback["_make_topic_callback"]
+  Callback --> Count["record raw topic arrival"]
   Callback --> Wrap["frame_from_ros_message"]
   Wrap --> Ingest["RosAdapter.ingest_frame"]
   Ingest --> Session["SessionRuntime.accept_frame"]
@@ -507,6 +514,8 @@ flowchart TD
 ```
 
 `RosAdapter.start()` 会先解析所有配置 topic 的 ROS message class。任一 topic 解析失败时，会在建立 subscriber 之前抛出 `RuntimeError`，错误信息列出失败的 `topic_key`、ROS topic 和 `msg_type`，并提示 source ROS workspace。该行为由 `tests/unit/test_ros_adapter.py` 覆盖。
+
+每个数据 topic callback 在 frame 转换前通过 condition 保护的计数器记录原始消息到达。`wait_for_topic_messages()` 在调用时快照指定 topic 的计数，并在共享的 `time_delay_ms` deadline 内等待每个计数至少增加一次；因此历史消息不计入本次 pipeline start，而转换失败的消息仍能证明 topic 有流量。
 
 消息类型解析路径：
 
@@ -799,7 +808,8 @@ Xtreme1 保存节点写出的业务文件位于：
 | 配置解析错误 | `load_app_config` 抛出 `ConfigError` |
 | `calibration.path` 缺失 | `AppRuntime.__init__` 抛出 `ValueError` |
 | ROS message class 解析失败 | `RosAdapter.start()` 在订阅前抛出 `RuntimeError` |
-| 初始 start 失败 | `AppRuntime.run()` 停止 ROS adapter 后重新抛出异常 |
+| pipeline topic 前置检查超时 | start 失败，错误列出缺失 topic，写 FAILED/setup_failed summary，服务继续运行 |
+| 任意 start 命令失败 | 记录异常和 `last_error`，服务继续运行并等待后续命令 |
 | session setup 失败 | 已 setup 节点逆序 teardown，写 FAILED summary，status idle FAILED |
 | ROS callback 包装或 ingest 异常 | 记录 exception，若有 active session 则 `metrics.error()` |
 | 节点 run 抛异常 | `DagExecutor` 转换为 `FAIL_SAMPLE` |

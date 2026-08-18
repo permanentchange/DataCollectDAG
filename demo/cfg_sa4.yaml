@@ -1,0 +1,187 @@
+output:
+  root_dir: ~/DATA_COLLECT
+calibration:
+  path: demo/calibration/sa4_cali.json
+ros:
+  node_name: data_collect_dag
+  control:
+    control_topic: /data_collect/control
+    status_topic: /data_collect/status
+  topics:
+    front_ext_camera:
+      topic: /miivii_gmsl_camera_node/miivii_gmsl/image2
+      msg_type: sensor_msgs/Image
+      role: image
+      sensor_name: front_ext_camera
+    front_camera:
+      topic: /miivii_gmsl_camera_node/miivii_gmsl/image4
+      msg_type: sensor_msgs/Image
+      role: image
+      sensor_name: front_camera
+    rear_camera:
+      topic: /miivii_gmsl_camera_node/miivii_gmsl/image5
+      msg_type: sensor_msgs/Image
+      role: image
+      sensor_name: rear_camera
+    left_camera:
+      topic: /miivii_gmsl_camera_node/miivii_gmsl/image6
+      msg_type: sensor_msgs/Image
+      role: image
+      sensor_name: left_camera
+    right_camera:
+      topic: /miivii_gmsl_camera_node/miivii_gmsl/image7
+      msg_type: sensor_msgs/Image
+      role: image
+      sensor_name: right_camera
+    top_lidar:
+      topic: /rslidar_points
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: top_lidar
+    front_right_lidar:
+      topic: /livox/lidar_rf
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: front_right_lidar
+    rear_right_lidar:
+      topic: /livox/lidar_rb
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: rear_right_lidar
+    front_left_lidar:
+      topic: /livox/lidar_lf
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: front_left_lidar
+    rear_left_lidar:
+      topic: /livox/lidar_lb
+      msg_type: sensor_msgs/PointCloud2
+      role: pointcloud
+      sensor_name: rear_left_lidar
+    imu:
+      topic: /imu/data
+      msg_type: sensor_msgs/Imu
+      role: imu
+      sensor_name: imu
+    bdstar_nmea:
+      topic: /bdstar/nmea_sentence
+      msg_type: bdstar/string
+      role: nmea
+      sensor_name: bdstar
+    odom:
+      topic: /odom
+      msg_type: nav_msgs/Odometry
+      role: odometry
+      sensor_name: odom
+    localization:
+      topic: /localization
+      msg_type: igv_msgs/location
+      role: localization
+      sensor_name: localization
+cache:
+  defaults_by_role:
+    image:
+      max_frames: 5
+      max_age_sec: 0.5
+    pointcloud:
+      max_frames: 5
+      max_age_sec: 0.5
+    imu:
+      max_frames: 100
+      max_age_sec: 0.5
+    nmea:
+      max_frames: 5
+      max_age_sec: 0.5
+    odometry:
+      max_frames: 25
+      max_age_sec: 0.5
+    localization:
+      max_frames: 100
+      max_age_sec: 0.5
+runtime:
+  debug: true
+  sample_workers: 1
+  node_workers: 3
+  main_frame_queue_size: 2
+  main_frame_delay_ms: 50
+  stop_timeout_sec: 1.0
+pipelines:
+  init:
+    description: Check topics.
+    main_source: front_ext_camera
+    topics:
+      - front_ext_camera
+      - front_camera
+      - rear_camera
+      - left_camera
+      - right_camera
+      - top_lidar
+      - front_right_lidar
+      - rear_right_lidar
+      - front_left_lidar
+      - rear_left_lidar
+    time_delay_ms: 500
+    stop_conditions:
+      max_duration_sec: 2
+    nodes:
+      - node_id: start
+        type: start
+      - node_id: sync_top_lidar
+        type: time_sync
+        inputs:
+          reference_frame: main_frame
+        outputs:
+          matched_frame: top_lidar_synced
+        config:
+          source: top_lidar
+          strategy: nearest
+          max_time_diff_ms: 50
+          wait_timeout_ms: 400
+          required: true
+      - node_id: sync_corner_lidars
+        type: multi_time_sync
+        inputs:
+          reference_frame: main_frame
+        outputs:
+          front_left_lidar: front_left_lidar
+          front_right_lidar: front_right_lidar
+          rear_left_lidar: rear_left_lidar
+          rear_right_lidar: rear_right_lidar
+        config:
+          sources:
+            - front_left_lidar
+            - front_right_lidar
+            - rear_left_lidar
+            - rear_right_lidar
+          strategy: nearest
+          max_time_diff_ms: 50
+          wait_timeout_ms: 400
+          required: true
+      - node_id: sync_images
+        type: multi_time_sync
+        inputs:
+          reference_frame: main_frame
+        outputs:
+          front_camera: front_camera
+          rear_camera: rear_camera
+          left_camera: left_camera
+          right_camera: right_camera
+        config:
+          sources:
+            - front_camera
+            - rear_camera
+            - left_camera
+            - right_camera
+          strategy: nearest
+          max_time_diff_ms: 10
+          wait_timeout_ms: 150
+          required: true
+      - node_id: end
+        type: end
+    edges:
+      - [start, sync_top_lidar]
+      - [start, sync_corner_lidars]
+      - [start, sync_images]
+      - [sync_top_lidar, end]
+      - [sync_corner_lidars, end]
+      - [sync_images, end]
