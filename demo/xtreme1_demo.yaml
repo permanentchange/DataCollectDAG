@@ -204,15 +204,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 200
           required: true
-      - node_id: top_lidar_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: top_lidar_compensated
-        outputs:
-          pointcloud: top_lidar_base
-        config:
-          sensor_topic: /rslidar_points
-          required: true
+          use_base_frame: true
       - node_id: front_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -225,15 +217,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: front_left_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: front_left_compensated
-        outputs:
-          pointcloud: front_left_base
-        config:
-          sensor_topic: /livox/lidar_lf
-          required: true
+          use_base_frame: true
       - node_id: front_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -246,15 +230,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: front_right_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: front_right_compensated
-        outputs:
-          pointcloud: front_right_base
-        config:
-          sensor_topic: /livox/lidar_rf
-          required: true
+          use_base_frame: true
       - node_id: rear_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -267,15 +243,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: rear_left_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: rear_left_compensated
-        outputs:
-          pointcloud: rear_left_base
-        config:
-          sensor_topic: /livox/lidar_lb
-          required: true
+          use_base_frame: true
       - node_id: rear_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -288,41 +256,41 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: rear_right_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: rear_right_compensated
-        outputs:
-          pointcloud: rear_right_base
-        config:
-          sensor_topic: /livox/lidar_rb
-          required: true
+          use_base_frame: true
       - node_id: aggregate_pointclouds
         type: aggregate_pointclouds
         outputs:
           pointcloud: aggregated_pointcloud
         config:
           required_inputs:
-            - top_lidar_base
+            - top_lidar_compensated
           optional_inputs:
-            - front_left_base
-            - front_right_base
-            - rear_left_base
-            - rear_right_base
+            - front_left_compensated
+            - front_right_compensated
+            - rear_left_compensated
+            - rear_right_compensated
       - node_id: save_xtreme1
         type: xtreme1_structured_save
         inputs:
-          image_front: main_frame
-          image_fisheye_front: front_fisheye_camera
-          image_fisheye_rear: rear_fisheye_camera
-          image_fisheye_left: left_fisheye_camera
-          image_fisheye_right: right_fisheye_camera
           pointcloud: aggregated_pointcloud
+          camera_0: main_frame
+          camera_1: front_fisheye_camera
+          camera_2: rear_fisheye_camera
+          camera_3: left_fisheye_camera
+          camera_4: right_fisheye_camera
         config:
           dataset_name: collect_demo
-          required_inputs:
-            - image_front
-            - pointcloud
+          cameras:
+            - input_name: camera_0
+              topic_key: front_wide_camera
+            - input_name: camera_1
+              topic_key: front_fisheye_camera
+            - input_name: camera_2
+              topic_key: rear_fisheye_camera
+            - input_name: camera_3
+              topic_key: left_fisheye_camera
+            - input_name: camera_4
+              topic_key: right_fisheye_camera
       - node_id: fps_control_marker
         type: fps_marker
         config:
@@ -336,20 +304,15 @@ pipelines:
       - [front_yolo_gate, sync_corner_lidars]
       - [front_yolo_gate, sync_fisheye_images]
       - [sync_top_lidar, top_lidar_motion]
-      - [top_lidar_motion, top_lidar_to_base]
-      - [top_lidar_to_base, aggregate_pointclouds]
+      - [top_lidar_motion, aggregate_pointclouds]
       - [sync_corner_lidars, front_left_motion]
-      - [front_left_motion, front_left_to_base]
-      - [front_left_to_base, aggregate_pointclouds]
+      - [front_left_motion, aggregate_pointclouds]
       - [sync_corner_lidars, front_right_motion]
-      - [front_right_motion, front_right_to_base]
-      - [front_right_to_base, aggregate_pointclouds]
+      - [front_right_motion, aggregate_pointclouds]
       - [sync_corner_lidars, rear_left_motion]
-      - [rear_left_motion, rear_left_to_base]
-      - [rear_left_to_base, aggregate_pointclouds]
+      - [rear_left_motion, aggregate_pointclouds]
       - [sync_corner_lidars, rear_right_motion]
-      - [rear_right_motion, rear_right_to_base]
-      - [rear_right_to_base, aggregate_pointclouds]
+      - [rear_right_motion, aggregate_pointclouds]
       - [sync_fisheye_images, save_xtreme1]
       - [aggregate_pointclouds, save_xtreme1]
       - [save_xtreme1, fps_control_marker]
@@ -475,15 +438,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 200
           required: true
-      - node_id: top_lidar_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: top_lidar_compensated
-        outputs:
-          pointcloud: top_lidar_base
-        config:
-          sensor_topic: /rslidar_points
-          required: true
+          use_base_frame: true
       - node_id: front_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -496,15 +451,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: front_left_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: front_left_compensated
-        outputs:
-          pointcloud: front_left_base
-        config:
-          sensor_topic: /livox/lidar_lf
-          required: true
+          use_base_frame: true
       - node_id: front_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -517,15 +464,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: front_right_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: front_right_compensated
-        outputs:
-          pointcloud: front_right_base
-        config:
-          sensor_topic: /livox/lidar_rf
-          required: true
+          use_base_frame: true
       - node_id: rear_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -538,15 +477,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: rear_left_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: rear_left_compensated
-        outputs:
-          pointcloud: rear_left_base
-        config:
-          sensor_topic: /livox/lidar_lb
-          required: true
+          use_base_frame: true
       - node_id: rear_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -559,41 +490,41 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: rear_right_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: rear_right_compensated
-        outputs:
-          pointcloud: rear_right_base
-        config:
-          sensor_topic: /livox/lidar_rb
-          required: true
+          use_base_frame: true
       - node_id: aggregate_pointclouds
         type: aggregate_pointclouds
         outputs:
           pointcloud: aggregated_pointcloud
         config:
           required_inputs:
-            - top_lidar_base
+            - top_lidar_compensated
           optional_inputs:
-            - front_left_base
-            - front_right_base
-            - rear_left_base
-            - rear_right_base
+            - front_left_compensated
+            - front_right_compensated
+            - rear_left_compensated
+            - rear_right_compensated
       - node_id: save_xtreme1
         type: xtreme1_structured_save
         inputs:
-          image_front: main_frame
-          image_fisheye_front: front_fisheye_camera
-          image_fisheye_rear: rear_fisheye_camera
-          image_fisheye_left: left_fisheye_camera
-          image_fisheye_right: right_fisheye_camera
           pointcloud: aggregated_pointcloud
+          camera_0: front_wide_camera_undistorted
+          camera_1: front_fisheye_camera_undistorted
+          camera_2: rear_fisheye_camera_undistorted
+          camera_3: left_fisheye_camera_undistorted
+          camera_4: right_fisheye_camera_undistorted
         config:
           dataset_name: collect_demo
-          required_inputs:
-            - image_front
-            - pointcloud
+          cameras:
+            - input_name: camera_0
+              topic_key: front_wide_camera
+            - input_name: camera_1
+              topic_key: front_fisheye_camera
+            - input_name: camera_2
+              topic_key: rear_fisheye_camera
+            - input_name: camera_3
+              topic_key: left_fisheye_camera
+            - input_name: camera_4
+              topic_key: right_fisheye_camera
       - node_id: fps_control_marker
         type: fps_marker
         config:
@@ -607,20 +538,15 @@ pipelines:
       - [fps_control_guard, sync_fisheye_images]
       - [fps_control_guard, undistort_front_wide]
       - [sync_top_lidar, top_lidar_motion]
-      - [top_lidar_motion, top_lidar_to_base]
-      - [top_lidar_to_base, aggregate_pointclouds]
+      - [top_lidar_motion, aggregate_pointclouds]
       - [sync_corner_lidars, front_left_motion]
-      - [front_left_motion, front_left_to_base]
-      - [front_left_to_base, aggregate_pointclouds]
+      - [front_left_motion, aggregate_pointclouds]
       - [sync_corner_lidars, front_right_motion]
-      - [front_right_motion, front_right_to_base]
-      - [front_right_to_base, aggregate_pointclouds]
+      - [front_right_motion, aggregate_pointclouds]
       - [sync_corner_lidars, rear_left_motion]
-      - [rear_left_motion, rear_left_to_base]
-      - [rear_left_to_base, aggregate_pointclouds]
+      - [rear_left_motion, aggregate_pointclouds]
       - [sync_corner_lidars, rear_right_motion]
-      - [rear_right_motion, rear_right_to_base]
-      - [rear_right_to_base, aggregate_pointclouds]
+      - [rear_right_motion, aggregate_pointclouds]
       - [sync_fisheye_images, undistort_front_fisheye]
       - [sync_fisheye_images, undistort_rear_fisheye]
       - [sync_fisheye_images, undistort_left_fisheye]
@@ -699,15 +625,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 200
           required: true
-      - node_id: top_lidar_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: top_lidar_compensated
-        outputs:
-          pointcloud: top_lidar_base
-        config:
-          sensor_topic: /rslidar_points
-          required: true
+          use_base_frame: true
       - node_id: front_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -720,15 +638,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: front_left_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: front_left_compensated
-        outputs:
-          pointcloud: front_left_base
-        config:
-          sensor_topic: /livox/lidar_lf
-          required: true
+          use_base_frame: true
       - node_id: front_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -741,15 +651,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: front_right_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: front_right_compensated
-        outputs:
-          pointcloud: front_right_base
-        config:
-          sensor_topic: /livox/lidar_rf
-          required: true
+          use_base_frame: true
       - node_id: rear_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -762,15 +664,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: rear_left_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: rear_left_compensated
-        outputs:
-          pointcloud: rear_left_base
-        config:
-          sensor_topic: /livox/lidar_lb
-          required: true
+          use_base_frame: true
       - node_id: rear_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -783,39 +677,29 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: rear_right_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: rear_right_compensated
-        outputs:
-          pointcloud: rear_right_base
-        config:
-          sensor_topic: /livox/lidar_rb
-          required: true
+          use_base_frame: true
       - node_id: aggregate_pointclouds
         type: aggregate_pointclouds
         outputs:
           pointcloud: aggregated_pointcloud
         config:
           required_inputs:
-            - top_lidar_base
+            - top_lidar_compensated
           optional_inputs:
-            - front_left_base
-            - front_right_base
-            - rear_left_base
-            - rear_right_base
+            - front_left_compensated
+            - front_right_compensated
+            - rear_left_compensated
+            - rear_right_compensated
       - node_id: save_xtreme1
         type: xtreme1_structured_save
         inputs:
-          image_front: front_wide_camera_undistorted
           pointcloud: aggregated_pointcloud
+          camera_0: front_wide_camera_undistorted
         config:
           dataset_name: collect_frontcamera
-          required_inputs:
-            - image_front
-            - pointcloud
-          camera_topics:
-            - front_wide_camera
+          cameras:
+            - input_name: camera_0
+              topic_key: front_wide_camera
       - node_id: fps_control_marker
         type: fps_marker
         config:
@@ -828,20 +712,15 @@ pipelines:
       - [fps_control_guard, sync_top_lidar]
       - [fps_control_guard, sync_corner_lidars]
       - [sync_top_lidar, top_lidar_motion]
-      - [top_lidar_motion, top_lidar_to_base]
-      - [top_lidar_to_base, aggregate_pointclouds]
+      - [top_lidar_motion, aggregate_pointclouds]
       - [sync_corner_lidars, front_left_motion]
-      - [front_left_motion, front_left_to_base]
-      - [front_left_to_base, aggregate_pointclouds]
+      - [front_left_motion, aggregate_pointclouds]
       - [sync_corner_lidars, front_right_motion]
-      - [front_right_motion, front_right_to_base]
-      - [front_right_to_base, aggregate_pointclouds]
+      - [front_right_motion, aggregate_pointclouds]
       - [sync_corner_lidars, rear_left_motion]
-      - [rear_left_motion, rear_left_to_base]
-      - [rear_left_to_base, aggregate_pointclouds]
+      - [rear_left_motion, aggregate_pointclouds]
       - [sync_corner_lidars, rear_right_motion]
-      - [rear_right_motion, rear_right_to_base]
-      - [rear_right_to_base, aggregate_pointclouds]
+      - [rear_right_motion, aggregate_pointclouds]
       - [undistort_front_wide, save_xtreme1]
       - [aggregate_pointclouds, save_xtreme1]
       - [save_xtreme1, fps_control_marker]
@@ -939,15 +818,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 200
           required: true
-      - node_id: top_lidar_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: top_lidar_compensated
-        outputs:
-          pointcloud: top_lidar_base
-        config:
-          sensor_topic: /rslidar_points
-          required: true
+          use_base_frame: true
       - node_id: front_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -960,15 +831,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: front_left_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: front_left_compensated
-        outputs:
-          pointcloud: front_left_base
-        config:
-          sensor_topic: /livox/lidar_lf
-          required: true
+          use_base_frame: true
       - node_id: front_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -981,15 +844,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: front_right_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: front_right_compensated
-        outputs:
-          pointcloud: front_right_base
-        config:
-          sensor_topic: /livox/lidar_rf
-          required: true
+          use_base_frame: true
       - node_id: rear_left_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -1002,15 +857,7 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: rear_left_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: rear_left_compensated
-        outputs:
-          pointcloud: rear_left_base
-        config:
-          sensor_topic: /livox/lidar_lb
-          required: true
+          use_base_frame: true
       - node_id: rear_right_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -1023,41 +870,41 @@ pipelines:
           localization_source: localization
           pose_wait_timeout_ms: 100
           required: true
-      - node_id: rear_right_to_base
-        type: pointcloud_transform
-        inputs:
-          pointcloud: rear_right_compensated
-        outputs:
-          pointcloud: rear_right_base
-        config:
-          sensor_topic: /livox/lidar_rb
-          required: true
+          use_base_frame: true
       - node_id: aggregate_pointclouds
         type: aggregate_pointclouds
         outputs:
           pointcloud: aggregated_pointcloud
         config:
           required_inputs:
-            - top_lidar_base
+            - top_lidar_compensated
           optional_inputs:
-            - front_left_base
-            - front_right_base
-            - rear_left_base
-            - rear_right_base
+            - front_left_compensated
+            - front_right_compensated
+            - rear_left_compensated
+            - rear_right_compensated
       - node_id: save_xtreme1
         type: xtreme1_structured_save
         inputs:
-          image_front: main_frame
-          image_fisheye_front: front_fisheye_camera
-          image_fisheye_rear: rear_fisheye_camera
-          image_fisheye_left: left_fisheye_camera
-          image_fisheye_right: right_fisheye_camera
           pointcloud: aggregated_pointcloud
+          camera_0: main_frame
+          camera_1: front_fisheye_camera
+          camera_2: rear_fisheye_camera
+          camera_3: left_fisheye_camera
+          camera_4: right_fisheye_camera
         config:
           dataset_name: collect_demo
-          required_inputs:
-            - image_front
-            - pointcloud
+          cameras:
+            - input_name: camera_0
+              topic_key: front_wide_camera
+            - input_name: camera_1
+              topic_key: front_fisheye_camera
+            - input_name: camera_2
+              topic_key: rear_fisheye_camera
+            - input_name: camera_3
+              topic_key: left_fisheye_camera
+            - input_name: camera_4
+              topic_key: right_fisheye_camera
       - node_id: fps_control_marker
         type: fps_marker
         config:
@@ -1071,20 +918,15 @@ pipelines:
       - [front_yolo_gate, sync_corner_lidars]
       - [front_yolo_gate, sync_fisheye_images]
       - [sync_top_lidar, top_lidar_motion]
-      - [top_lidar_motion, top_lidar_to_base]
-      - [top_lidar_to_base, aggregate_pointclouds]
+      - [top_lidar_motion, aggregate_pointclouds]
       - [sync_corner_lidars, front_left_motion]
-      - [front_left_motion, front_left_to_base]
-      - [front_left_to_base, aggregate_pointclouds]
+      - [front_left_motion, aggregate_pointclouds]
       - [sync_corner_lidars, front_right_motion]
-      - [front_right_motion, front_right_to_base]
-      - [front_right_to_base, aggregate_pointclouds]
+      - [front_right_motion, aggregate_pointclouds]
       - [sync_corner_lidars, rear_left_motion]
-      - [rear_left_motion, rear_left_to_base]
-      - [rear_left_to_base, aggregate_pointclouds]
+      - [rear_left_motion, aggregate_pointclouds]
       - [sync_corner_lidars, rear_right_motion]
-      - [rear_right_motion, rear_right_to_base]
-      - [rear_right_to_base, aggregate_pointclouds]
+      - [rear_right_motion, aggregate_pointclouds]
       - [sync_fisheye_images, save_xtreme1]
       - [aggregate_pointclouds, save_xtreme1]
       - [save_xtreme1, fps_control_marker]

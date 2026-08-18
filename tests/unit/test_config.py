@@ -111,11 +111,50 @@ def test_frontcamera_pipeline_only_processes_front_wide_camera():
     assert "sync_fisheye_images" not in pipeline.nodes_by_id
     assert {node_id for node_id in pipeline.nodes_by_id if node_id.startswith("undistort_")} == {"undistort_front_wide"}
     assert pipeline.nodes_by_id["save_xtreme1"].inputs == {
-        "image_front": "front_wide_camera_undistorted",
+        "camera_0": "front_wide_camera_undistorted",
         "pointcloud": "aggregated_pointcloud",
     }
-    assert pipeline.nodes_by_id["save_xtreme1"].config["camera_topics"] == ["front_wide_camera"]
+    assert pipeline.nodes_by_id["save_xtreme1"].config["cameras"] == [
+        {"input_name": "camera_0", "topic_key": "front_wide_camera"}
+    ]
     assert set(pipeline.predecessors["save_xtreme1"]) == {"aggregate_pointclouds", "undistort_front_wide"}
+
+
+def test_all_demo_xtreme1_nodes_use_generic_camera_bindings():
+    config = load_app_config(Path("demo/xtreme1_demo.yaml"))
+
+    for pipeline in config.pipelines.values():
+        save_node = next((node for node in pipeline.nodes_by_id.values() if node.node_type == "xtreme1_structured_save"), None)
+        if save_node is None:
+            continue
+        assert "pointcloud" in save_node.inputs
+        assert "required_inputs" not in save_node.config
+        assert "camera_topics" not in save_node.config
+        assert save_node.config["cameras"]
+        for camera in save_node.config["cameras"]:
+            assert camera["input_name"] in save_node.inputs
+            assert config.topics[camera["topic_key"]].role == "image"
+
+
+def test_load_sa4_fps_uses_ordered_generic_camera_bindings():
+    config = load_app_config(Path("demo/cfg_sa4.yaml"))
+    save_node = config.pipelines["fps"].nodes_by_id["save_xtreme1"]
+
+    assert save_node.inputs == {
+        "pointcloud": "aggregated_pointcloud",
+        "camera_0": "main_frame",
+        "camera_1": "front_camera",
+        "camera_2": "rear_camera",
+        "camera_3": "left_camera",
+        "camera_4": "right_camera",
+    }
+    assert save_node.config["cameras"] == [
+        {"input_name": "camera_0", "topic_key": "front_ext_camera"},
+        {"input_name": "camera_1", "topic_key": "front_camera"},
+        {"input_name": "camera_2", "topic_key": "rear_camera"},
+        {"input_name": "camera_3", "topic_key": "left_camera"},
+        {"input_name": "camera_4", "topic_key": "right_camera"},
+    ]
 
 
 def test_demo_collection_pipelines_disable_undistort_debug_artifacts():

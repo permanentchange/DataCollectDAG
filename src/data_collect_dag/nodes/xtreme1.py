@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
@@ -12,45 +12,41 @@ from data_collect_dag.ros_messages import ensure_image_frame_decoded, ensure_poi
 from data_collect_dag.sample_context import MissingContextKeyError
 
 
-CAMERA_TOPIC_ORDER = [
-    "front_wide_camera",
-    "front_fisheye_camera",
-    "rear_fisheye_camera",
-    "left_fisheye_camera",
-    "right_fisheye_camera",
-]
-
-CAMERA_INPUT_NAME_BY_TOPIC = {
-    "front_wide_camera": "image_front",
-    "front_fisheye_camera": "image_fisheye_front",
-    "rear_fisheye_camera": "image_fisheye_rear",
-    "left_fisheye_camera": "image_fisheye_left",
-    "right_fisheye_camera": "image_fisheye_right",
-}
-
-
 class Xtreme1SaveNode(BaseNode):
     def setup(self) -> None:
         self._dataset_name = str(self.config.get("dataset_name", "collect_demo"))
+        if "pointcloud" not in self.inputs:
+            raise ValueError("pointcloud input is required")
+        self._cameras = _resolve_camera_bindings(
+            self.config.get("cameras"),
+            self.inputs,
+            self.session.app_config.topics,
+            self.session.calibration["images"],
+        )
         self._save_root = self.session.session_root / "xtreme1" / self._dataset_name
-        self._camera_topics = _resolve_camera_topics(self.config.get("camera_topics"), self.session.app_config.topics)
         (self._save_root / "camera_config").mkdir(parents=True, exist_ok=True)
         (self._save_root / "lidar_point_cloud_0").mkdir(parents=True, exist_ok=True)
-        for topic_key in self._camera_topics:
-            index = CAMERA_TOPIC_ORDER.index(topic_key)
+        for index in range(len(self._cameras)):
             (self._save_root / f"camera_image_{index}").mkdir(parents=True, exist_ok=True)
-        for topic_key in self._camera_topics:
-            ros_topic = self.session.app_config.topics[topic_key].topic
-            if ros_topic not in self.session.calibration["images"]:
-                raise ValueError(f"missing camera calibration for {topic_key} -> {ros_topic}")
 
     def run(self, sample):
-        required_inputs = list(self.config.get("required_inputs") or [])
-        for key in required_inputs:
-            if not sample.has(self.inputs[key]):
-                self.logger.debug("save skip sample_id=%s node_id=%s missing_required=%s", sample.sample_id, self.node_id, key)
-                return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_{key}_missing")
-        main_image = ensure_image_frame_decoded(sample.get(self.inputs["image_front"]))
+        if not sample.has(self.inputs["pointcloud"]):
+            self.logger.debug("save skip sample_id=%s node_id=%s missing_required=pointcloud", sample.sample_id, self.node_id)
+            return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_pointcloud_missing")
+        for input_name, _, _ in self._cameras:
+            if not sample.has(self.inputs[input_name]):
+                self.logger.debug(
+                    "save skip sample_id=%s node_id=%s missing_required=%s",
+                    sample.sample_id,
+                    self.node_id,
+                    input_name,
+                )
+                return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_{input_name}_missing")
+
+        camera_images = [
+            ensure_image_frame_decoded(sample.get(self.inputs[input_name]))
+            for input_name, _, _ in self._cameras
+        ]
         pointcloud = ensure_pointcloud_frame_parsed(sample.get(self.inputs["pointcloud"]))
         if pointcloud.frame_name != "base":
             self.logger.debug(
@@ -60,26 +56,16 @@ class Xtreme1SaveNode(BaseNode):
                 pointcloud.frame_name,
             )
             return NodeOutcome(status=NodeResult.FAIL_SAMPLE, reason=f"{self.node_id}_pointcloud_not_in_base")
-        stem = str(int(main_image.meta.source_timestamp_ns))
+        stem = str(int(camera_images[0].meta.source_timestamp_ns))
         saved_images: List[str] = []
         saved_camera_topics: List[str] = []
         camera_configs: List[Dict[str, Any]] = []
-        for topic_key in self._camera_topics:
-            index = CAMERA_TOPIC_ORDER.index(topic_key)
-            input_name = CAMERA_INPUT_NAME_BY_TOPIC[topic_key]
-            ros_topic = self.session.app_config.topics[topic_key].topic
-            image = None
-            if input_name in self.inputs:
-                input_key = self.inputs[input_name]
-                corrected_key = f"{topic_key}_undistorted"
-                selected_key = corrected_key if sample.has(corrected_key) else input_key
-                if sample.has(selected_key):
-                    image = ensure_image_frame_decoded(sample.get(selected_key))
-                    image_path = self._save_root / f"camera_image_{index}" / f"{stem}.jpg"
-                    assert image.image_bgr is not None
-                    save_jpg(image_path, image.image_bgr)
-                    saved_images.append(str(image_path))
-                    saved_camera_topics.append(topic_key)
+        for index, ((_, topic_key, ros_topic), image) in enumerate(zip(self._cameras, camera_images)):
+            image_path = self._save_root / f"camera_image_{index}" / f"{stem}.jpg"
+            assert image.image_bgr is not None
+            save_jpg(image_path, image.image_bgr)
+            saved_images.append(str(image_path))
+            saved_camera_topics.append(topic_key)
             camera_params = dict(self.session.calibration["images"][ros_topic])
             corrected_params = sample.metadata.get("undistort_camera_params", {}).get(topic_key)
             if corrected_params is not None:
@@ -111,21 +97,43 @@ class Xtreme1SaveNode(BaseNode):
         return self.ok()
 
 
-def _resolve_camera_topics(configured_topics: Any, available_topics: Dict[str, Any]) -> List[str]:
-    if configured_topics is None:
-        return [topic_key for topic_key in CAMERA_TOPIC_ORDER if topic_key in available_topics]
-    if not isinstance(configured_topics, list) or not configured_topics:
-        raise ValueError("camera_topics must be a non-empty list")
-    selected_topics: List[str] = []
-    for topic_key in configured_topics:
-        if not isinstance(topic_key, str) or topic_key not in CAMERA_INPUT_NAME_BY_TOPIC:
-            raise ValueError(f"unsupported camera topic: {topic_key}")
-        if topic_key not in available_topics:
-            raise ValueError(f"configured camera topic is missing from ros.topics: {topic_key}")
-        if topic_key in selected_topics:
-            raise ValueError(f"duplicate camera topic: {topic_key}")
-        selected_topics.append(topic_key)
-    return selected_topics
+def _resolve_camera_bindings(
+    configured_cameras: Any,
+    inputs: Dict[str, str],
+    available_topics: Dict[str, Any],
+    image_calibrations: Dict[str, Any],
+) -> List[Tuple[str, str, str]]:
+    if not isinstance(configured_cameras, list) or not configured_cameras:
+        raise ValueError("cameras must be a non-empty list")
+    bindings: List[Tuple[str, str, str]] = []
+    input_names = set()
+    topic_keys = set()
+    for index, item in enumerate(configured_cameras):
+        if not isinstance(item, dict):
+            raise ValueError(f"camera binding at index {index} must be a mapping")
+        input_name = str(item.get("input_name", "")).strip()
+        topic_key = str(item.get("topic_key", "")).strip()
+        if not input_name:
+            raise ValueError(f"camera binding at index {index} missing input_name")
+        if not topic_key:
+            raise ValueError(f"camera binding at index {index} missing topic_key")
+        if input_name not in inputs:
+            raise ValueError(f"camera input_name not found in node inputs: {input_name}")
+        if input_name in input_names:
+            raise ValueError(f"duplicate camera input_name: {input_name}")
+        if topic_key in topic_keys:
+            raise ValueError(f"duplicate camera topic_key: {topic_key}")
+        topic = available_topics.get(topic_key)
+        if topic is None:
+            raise ValueError(f"camera topic_key not found in ros.topics: {topic_key}")
+        if topic.role != "image":
+            raise ValueError(f"camera topic_key must have image role: {topic_key}")
+        if topic.topic not in image_calibrations:
+            raise ValueError(f"missing camera calibration for {topic_key} -> {topic.topic}")
+        input_names.add(input_name)
+        topic_keys.add(topic_key)
+        bindings.append((input_name, topic_key, topic.topic))
+    return bindings
 
 
 def _build_camera_config(camera_params: Dict[str, Any], image) -> Dict[str, Any]:

@@ -311,10 +311,17 @@ class PointCloudMotionCompensationNode(BaseNode):
         ref_rotation_wb = quaternion_to_rotation_matrix(ref_quat[0])
         ref_translation_wb = ref_position[0]
         ref_base_points = (world_points - ref_translation_wb[None, :]) @ ref_rotation_wb
-        compensated = (ref_base_points - translation_bs[None, :]) @ rotation_bs
+        use_base_frame = bool(self.config.get("use_base_frame", False))
+        if use_base_frame:
+            compensated = ref_base_points
+        else:
+            compensated = (ref_base_points - translation_bs[None, :]) @ rotation_bs
         output_points = cloud.points_xyz.copy()
         output_points[finite_mask] = compensated
-        compensated_cloud = cloud.replace(points_xyz=output_points)
+        compensated_cloud = cloud.replace(
+            points_xyz=output_points,
+            frame_name="base" if use_base_frame else cloud.frame_name,
+        )
         sample.put(self.outputs["pointcloud"], compensated_cloud, self.node_id)
         sample.metadata["motion_compensation"] = {
             "applied": True,

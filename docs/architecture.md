@@ -363,7 +363,7 @@ teardown()
 | 节点 | 行为 |
 |---|---|
 | `PointCloudRadiusCropNode` | 解析点云后按 XY 平面半径 `max_radius_m` 裁剪，写 `pointcloud_processing` metadata；required 且裁剪后为空则跳过样本 |
-| `PointCloudMotionCompensationNode` | setup 校验 `sensor_topic` 对应点云外参；运行时要求点级 timestamp，等待 localization 覆盖，插值轨迹，将点补偿到 reference frame 时间；缺少覆盖时按 required 决定 skip 或 warning |
+| `PointCloudMotionCompensationNode` | setup 校验 `sensor_topic` 对应点云外参；运行时要求点级 timestamp，等待 localization 覆盖并插值轨迹，将点补偿到 reference frame 时间；默认输出该时刻的传感器坐标，`use_base_frame: true` 时直接输出 base 坐标并设置 `frame_name="base"`；缺少覆盖时按 required 决定 skip 或 warning |
 | `PointCloudTransformNode` | setup 校验点云外参；使用 `sensor2base` 变换点云并把 `frame_name` 设为 `base` |
 | `PointCloudRoiCropNode` | 在 base 坐标下按 `front_m`、`rear_m`、`side_m` 裁剪；required 且为空则跳过 |
 | `AggregatePointCloudNode` | 聚合 required 和已存在 optional 点云，输出 `frame_name="base"` 的聚合点云；required 缺失或聚合为空则跳过 |
@@ -378,27 +378,40 @@ teardown()
 
 ### 11.5 保存节点
 
-`Xtreme1SaveNode` 位于 `src/data_collect_dag/nodes/xtreme1.py`。`setup()` 创建如下目录：
+`Xtreme1SaveNode` 位于 `src/data_collect_dag/nodes/xtreme1.py`。节点通过 `config.cameras` 接收有序相机绑定，每项包含 `input_name` 和 `topic_key`；列表顺序决定 Xtreme1 的 `camera_image_N` 序号。节点 `inputs` 必须包含 `pointcloud` 以及每个相机绑定引用的逻辑输入名。例如：
+
+```yaml
+inputs:
+  pointcloud: aggregated_pointcloud
+  camera_0: main_frame
+  camera_1: front_camera
+config:
+  cameras:
+    - input_name: camera_0
+      topic_key: front_ext_camera
+    - input_name: camera_1
+      topic_key: front_camera
+```
+
+`setup()` 校验相机列表非空、输入名和 topic 不重复、逻辑输入存在、topic 为 image role 且标定存在，然后按相机数量创建如下目录：
 
 ```text
 <session_root>/xtreme1/<dataset_name>/
   camera_config/
   lidar_point_cloud_0/
   camera_image_0/
-  camera_image_1/
-  camera_image_2/
-  camera_image_3/
-  camera_image_4/
+  ...
+  camera_image_<N-1>/
 ```
 
-它会对当前 `CAMERA_TOPIC_ORDER` 中已配置的 topic 校验图像标定存在。`run()` 按 `config.required_inputs` 校验 required 输入，解码前视主图和点云，要求点云 `frame_name == "base"`，然后写：
+`run()` 要求所有配置相机和点云输入存在，缺失时返回 `SKIP_SAMPLE`；要求点云 `frame_name == "base"`，否则返回 `FAIL_SAMPLE`。第一项相机的时间戳作为同一样本全部输出文件的文件名。节点随后写：
 
-1. 每个已存在可选图像输入的 JPG。
+1. 每个配置相机的 JPG。
 2. 聚合点云 ASCII PCD。
-3. 包含 5 个相机配置项的 camera config JSON。
+3. 按配置顺序包含相机参数的 camera config JSON。
 4. `sample.metadata["save_result"]`，包括 `saved`、`dataset_name`、`camera_config`、`images`、`saved_camera_topics`、`pointcloud`。
 
-测试 `tests/unit/test_xtreme1_save_node.py` 验证了文件输出、可选图像缺失时仍写相机配置、非 base 点云返回 `FAIL_SAMPLE`。
+测试 `tests/unit/test_xtreme1_save_node.py` 验证了通用相机命名、有序输出、必需输入、配置校验、标定校验和非 base 点云返回 `FAIL_SAMPLE`。
 
 ## 12. 数据模型
 
@@ -592,7 +605,7 @@ demo pipeline `xtreme1_collect` 的主要处理链来自 `demo/xtreme1_demo.yaml
 4. `sync_top_lidar` 同步顶置激光雷达。
 5. `sync_corner_lidars` 同步四个角雷达。
 6. `sync_fisheye_images` 同步四个鱼眼相机。
-7. 每路雷达做 motion compensation 和 transform to base。
+7. 每路雷达通过 `use_base_frame: true` 在 motion compensation 中直接输出 reference-time base 点云。
 8. `aggregate_pointclouds` 聚合 base 点云。
 9. `save_xtreme1` 保存图片、聚合点云和相机配置。
 10. `fps_control_marker` 在保存链路后记录主帧时间戳。
@@ -854,7 +867,7 @@ data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect
 | `tests/unit/test_multi_time_sync_node.py` | 多源同步和共享 wait budget |
 | `tests/unit/test_yolo_gate_node.py` | YOLO gate 多类别通过、跳过、推理失败、device 规范化、CUDA 校验、模型缺失 |
 | `tests/unit/test_pointcloud_*_node.py` | 点云裁剪、变换、运动补偿、聚合 |
-| `tests/unit/test_xtreme1_save_node.py` | Xtreme1 输出文件、可选图像缺失、点云 frame 校验 |
+| `tests/unit/test_xtreme1_save_node.py` | Xtreme1 通用相机绑定、有序输出、必需输入、配置/标定校验和点云 frame 校验 |
 | `tests/unit/test_status_summary.py` | 状态快照更新、磁盘剩余空间字段和 summary JSON |
 | `tests/unit/test_session_runtime.py` | 主帧队列 drop oldest、pause/resume、max duration/max saved completion |
 | `tests/unit/test_control_queue.py` | 控制命令队列 |

@@ -673,17 +673,15 @@ rosbag_save 可作为后续 SaveNode 类型接入。
 
 保存节点应能够根据上游筛选结果决定是否保存当前样本。
 
-保存节点应支持配置 required_inputs 与 optional_inputs。
+Xtreme1 保存节点应通过节点 `inputs` 声明 `pointcloud` 和相机逻辑输入，并通过非空的有序 `config.cameras` 列表绑定相机。每个绑定包含 `input_name` 和 `topic_key`，列表顺序决定 `camera_image_N` 的编号。
 
-save node 的 required_inputs 表示保存节点生成有效样本所需的最小输入集合。
-
-当 required_inputs 缺失时，保存节点应返回 SKIP_SAMPLE，不应计入 samples_saved。
+`pointcloud` 和 `config.cameras` 中声明的全部相机均为有效 Xtreme1 样本的必需输入。任一输入缺失时，节点应返回 `SKIP_SAMPLE`，不应计入 `samples_saved`。可选传感器的取舍应由上游同步或聚合节点完成。
 
 保存节点职责：
 
 1. 从 SampleContext 读取配置指定的输入。
-2. 校验 required_inputs。
-3. optional_inputs 缺失时继续执行。
+2. 校验有序相机绑定、相机标定和必需输入。
+3. 要求输入点云位于 base 坐标系。
 4. 决定保存目录结构。
 5. 保存结构化样本文件。
 6. 写 sample metadata。

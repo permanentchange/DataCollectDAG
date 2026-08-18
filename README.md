@@ -145,7 +145,7 @@ The `xtreme1_collect` demo pipeline:
 - uses `front_wide_camera` as the main trigger source
 - runs a YOLO `person` gate on the main image
 - synchronizes roof lidar, corner lidars, and fisheye cameras
-- compensates and transforms point clouds into the base frame
+- motion-compensates point clouds directly into the base frame
 - aggregates the lidar outputs
 - saves images, point cloud, and camera config in an Xtreme1-style layout
 

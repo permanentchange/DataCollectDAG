@@ -45,6 +45,11 @@ class DagExecutor:
                 try:
                     outcome = future.result()
                 except Exception as exc:
+                    self.logger.exception(
+                        "node raised exception sample_id=%s node_id=%s",
+                        sample.sample_id,
+                        node_id,
+                    )
                     outcome = NodeOutcome(status=NodeResult.FAIL_SAMPLE, reason=f"{node_id}: {exc}")
                 elapsed_ms = None
                 if started_at is not None:
