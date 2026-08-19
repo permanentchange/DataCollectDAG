@@ -3,6 +3,8 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from data_collect_dag.app import AppRuntime
 from data_collect_dag.control import ControlCommand, ControlCommandQueue
 from data_collect_dag.status import StatusManager
@@ -40,6 +42,11 @@ class _FailOnceSessionManager:
 class _SuccessfulSessionManager:
     def start(self, _pipeline_name):
         return None
+
+
+class _FailingStopSessionManager:
+    def stop(self, **_kwargs):
+        raise RuntimeError("stop cleanup failed")
 
 
 class _FailureHandledEvent:
@@ -102,3 +109,13 @@ def test_successful_start_clears_previous_control_error():
     runtime._dispatch_command(ControlCommand(kind="start", pipeline_name="valid"))
 
     assert runtime.status_manager.snapshot().last_error is None
+
+
+def test_shutdown_stops_control_loop_when_session_cleanup_fails():
+    runtime = _make_runtime(_FailingStopSessionManager())
+
+    with pytest.raises(RuntimeError, match="stop cleanup failed"):
+        runtime._dispatch_command(ControlCommand(kind="shutdown", reason="test_shutdown"))
+
+    assert runtime._stop_event.is_set()
+    assert runtime._control_stop_event.is_set()

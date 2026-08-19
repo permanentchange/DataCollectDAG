@@ -34,7 +34,7 @@ DataCollectDAG 的 pipeline、ROS 输入 topic、缓存策略、运行参数和�
 data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect
 ```
 
-运行时会启动 ROS adapter，并自动启动 CLI 参数指定的 pipeline。pipeline 可选配置 `topics` 和 `time_delay_ms`：每次 start 后，所有指定 topic 必须在该统一窗口内分别到达至少一条新消息，才会进入 DAG node setup；超时错误会在 `last_error` 中列出缺失 topic。该 start 与之后通过控制 topic 发送的 start 使用相同的错误处理：pipeline 名称、topic 前置检查或 setup 错误只会使当前命令失败，服务仍会继续接收控制命令；后续 start 成功后会清空旧的 `last_error`。如果在已有活动 session 时再次发送 `start`，当前 session 会先停止，新 session 再启动。
+运行时会启动 ROS adapter，并自动启动 CLI 参数指定的 pipeline。pipeline 可选配置 `topics` 和 `time_delay_ms`：每次 start 后，所有指定 topic 必须在该统一窗口内分别到达至少一条新消息，才会进入 DAG node setup；超时错误会在 `last_error` 中列出缺失 topic。该 start 与之后通过控制 topic 发送的 start 使用相同的错误处理：pipeline 名称、topic 前置检查或 setup 错误只会使当前命令失败，服务仍会继续接收控制命令；后续 start 成功后会清空旧的 `last_error`。如果在已有活动 session 时再次发送 `start`，当前 session 会先完整停止并写出 summary，然后才校验和启动目标 pipeline。因此目标 pipeline 不存在时，旧 session 仍以 `STOPPED/replaced_by_new_start` 结束，工具最终保持 `IDLE`。
 
 ## 3. ROS 配置
 
@@ -102,6 +102,8 @@ std_msgs/String
 1. `pipeline` 必须是非空字符串，代码会对两端空白做 `strip()`。
 2. `pipeline` 必须存在于启动时加载的配置中。
 3. 如果当前已有活动 session，会先停止当前 session，再启动新 session。
+4. 旧 session 停止成功但目标 pipeline 不存在时，不会创建新 session；最终状态为 `IDLE`，`recent_session_status` 保持旧 session 的 `STOPPED`，`last_error` 记录 unknown pipeline。
+5. 旧 session 清理失败时中止新启动；最终状态为 `IDLE/FAILED`，不会继续创建目标 session。
 
 ### 5.2 pause
 
@@ -144,7 +146,7 @@ std_msgs/String
 | `command` 大小写不匹配 | `{"command":"Start","pipeline":"xtreme1_collect"}` |
 | start 缺少有效 pipeline | `{"command":"start"}`、`{"command":"start","pipeline":""}` |
 
-非法控制消息不会直接修改当前任务状态，也不会直接写入 `last_error`。如果消息格式合法但执行失败，例如 pipeline 名称不存在，控制线程会记录异常，并通过 status 的 `last_error` 暴露错误文本。
+非法控制消息不会直接修改当前任务状态，也不会直接写入 `last_error`。如果消息格式合法但执行失败，例如 pipeline 名称不存在，控制线程会记录异常，并通过 status 的 `last_error` 暴露错误文本。若执行失败前存在活动 session，start 的替换语义仍然生效：旧 session 先结束，随后工具停留在 `IDLE`。
 
 ## 6. 状态消息
 
@@ -194,7 +196,7 @@ std_msgs/String
 | `recent_session_status` | string 或 null | 最近结束 session 的状态：`STOPPED`、`COMPLETED`、`FAILED` |
 | `current_session_id` | string 或 null | 当前活动 session id |
 | `current_pipeline_name` | string 或 null | 当前活动 session 的 pipeline 名称 |
-| `start_time` | string 或 null | session 开始时间 |
+| `start_time` | string 或 null | 当前活动 session 的开始时间；`IDLE` 时为 null |
 | `disk_free_gb` | number 或 null | `output.root_dir` 所在文件系统的当前剩余空间，单位 GB |
 | `last_error` | string 或 null | 最近一次控制或运行错误 |
 | `warnings` | number | warning 计数 |
@@ -226,6 +228,57 @@ std_msgs/String
 | stop | `tool_state == "IDLE"`，`recent_session_status == "STOPPED"` |
 
 `recent_session_status` 表示最近一次结束状态，不等价于当前运行状态。判断当前是否有活动任务，应优先使用 `tool_state`、`current_session_id` 和 `current_pipeline_name`。
+
+start 失败的确认条件：
+
+| 场景 | 确认条件 |
+| --- | --- |
+| 目标 pipeline 不存在，且此前无活动 session | `tool_state == "IDLE"`、三个 current 字段为 null、`last_error != null`；`recent_session_status` 保持原值 |
+| 目标 pipeline 不存在，且替换了活动 session | `tool_state == "IDLE"`、`recent_session_status == "STOPPED"`、三个 current 字段为 null、`last_error != null` |
+| topic precheck 或 setup 失败 | `tool_state == "IDLE"`、`recent_session_status == "FAILED"`、三个 current 字段为 null、`last_error != null` |
+
+新 session 成功进入 `RUNNING` 时，warning、消息、样本和原因计数全部归零。进入 `IDLE` 后，这些字段保留最近结束 session 的最终计数，直到下一次 start 成功。
+
+### 6.1 状态转换
+
+`STARTING`、`STOPPING`、`COMPLETING`、`REPLACING` 和 `SHUTTING_DOWN` 是内部处理阶段，不会作为 `tool_state` 发布。
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+
+    IDLE --> STARTING: start(pipeline)
+    STARTING --> RUNNING: pipeline存在且precheck/setup成功
+    STARTING --> IDLE: pipeline不存在\nlast_error更新，recent保持
+    STARTING --> IDLE: precheck/setup失败\nrecent=FAILED
+
+    RUNNING --> PAUSED: pause
+    PAUSED --> RUNNING: resume
+    RUNNING --> RUNNING: resume / 非法消息 / 陈旧complete
+    PAUSED --> PAUSED: pause / 非法消息 / 陈旧complete
+    IDLE --> IDLE: stop / pause / resume / 非法消息
+
+    RUNNING --> STOPPING: stop
+    PAUSED --> STOPPING: stop
+    STOPPING --> IDLE: 清理成功\nrecent=STOPPED
+    STOPPING --> IDLE: 清理异常\nrecent=FAILED + last_error
+
+    RUNNING --> COMPLETING: 达到结束条件
+    PAUSED --> COMPLETING: 已排队且session_id匹配的complete
+    COMPLETING --> IDLE: 清理成功\nrecent=COMPLETED
+    COMPLETING --> IDLE: 清理异常\nrecent=FAILED + last_error
+
+    RUNNING --> REPLACING: start(pipeline)
+    PAUSED --> REPLACING: start(pipeline)
+    REPLACING --> IDLE: 旧session清理成功\nSTOPPED/replaced_by_new_start
+    REPLACING --> IDLE: 旧session清理异常\nFAILED/replaced_by_new_start_failed
+    IDLE --> STARTING: 旧session清理成功后继续同一start命令
+
+    RUNNING --> SHUTTING_DOWN: SIGINT/SIGTERM
+    PAUSED --> SHUTTING_DOWN: SIGINT/SIGTERM
+    IDLE --> SHUTTING_DOWN: SIGINT/SIGTERM
+    SHUTTING_DOWN --> [*]: 无论清理是否抛异常都结束控制循环
+```
 
 ## 7. 输出文件
 
@@ -331,6 +384,74 @@ sequenceDiagram
     R->>R: read <output_root_dir>/<session_id>/session_summary.json
     R->>R: read <output_root_dir>/<session_id>/saved_samples.json
 ```
+
+### 8.4 运行中启动不存在的 pipeline
+
+```mermaid
+sequenceDiagram
+    participant C as 控制方
+    participant N as DataCollectDAG
+    participant O as 状态订阅方
+    participant F as 输出目录
+
+    Note over N: 当前为RUNNING，session_id=old_session
+    C->>N: start pipeline="missing"
+    N->>N: 停止old_session
+    N->>F: 写session_summary.json\nSTOPPED/replaced_by_new_start
+    N->>N: 清空active session并校验目标pipeline
+    N->>N: 抛出unknown pipeline并记录last_error
+    N-->>O: IDLE, recent=STOPPED
+    N-->>O: current_session_id=null\ncurrent_pipeline_name=null\nstart_time=null
+    N-->>O: last_error包含"unknown pipeline: missing"
+    Note over N: 节点和控制线程继续运行，可接受下一条合法start
+```
+
+### 8.5 错误处理
+
+```mermaid
+flowchart TD
+    A["ROS control消息"] --> B{"JSON object且command合法？"}
+    B -- 否 --> B1["记录warning；状态和last_error不变"]
+    B -- 是 --> C["进入串行ControlCommandQueue"]
+
+    C --> D{"命令类型"}
+    D -- start --> E{"存在active session？"}
+    E -- 是 --> F["先按replaced_by_new_start停止旧session"]
+    F --> G{"旧session清理成功？"}
+    G -- 否 --> G1["继续剩余清理；IDLE/FAILED；中止新启动"]
+    G -- 是 --> H{"目标pipeline存在？"}
+    E -- 否 --> H
+    H -- 否 --> H1["不创建session；IDLE；recent保持；写last_error"]
+    H -- 是 --> I["创建session目录、topic precheck、node setup、worker启动"]
+    I --> J{"启动成功？"}
+    J -- 是 --> J1["RUNNING；设置current字段；指标归零；清错误"]
+    J -- 否 --> J2["解绑、逆序teardown、关闭资源"]
+    J2 --> J3["尽可能写FAILED/setup_failed summary"]
+    J3 --> J4["IDLE/FAILED；聚合last_error"]
+
+    D -- stop/complete --> K{"存在且匹配active session？"}
+    K -- 否 --> K1["忽略；状态不变"]
+    K -- 是 --> L["停止接收、取消worker、解绑session"]
+    L --> M["逆序teardown、写saved_samples和summary"]
+    M --> N{"任一步抛异常？"}
+    N -- 否 --> N1["IDLE + STOPPED或COMPLETED"]
+    N -- 是 --> N2["继续可执行的剩余清理；IDLE/FAILED；reason加_failed"]
+
+    D -- shutdown --> O["执行STOPPED清理"]
+    O --> O1["无论清理是否抛异常都结束控制循环"]
+
+    P["ROS数据消息"] --> Q{"消息转换成功？"}
+    Q -- 否 --> Q1["日志和error计数；session状态不变"]
+    Q -- 是 --> R{"当前RUNNING且接收帧？"}
+    R -- 否 --> R1["忽略该帧"]
+    R -- 是 --> S["执行样本DAG"]
+    S --> T{"node结果"}
+    T -- OK --> T1["继续DAG"]
+    T -- SKIP_SAMPLE --> T2["记录skip；session继续"]
+    T -- FAIL_SAMPLE或异常 --> T3["记录fail；session继续"]
+```
+
+配置解析、标定加载、ROS master 连接和 ROS message class 解析发生在控制接口可用之前。这些进程启动错误无法通过 `/data_collect/status` 报告，只能通过进程退出和日志诊断。线程中永久不返回的 node 不在本错误恢复模型内；停止流程仍会等待已经运行的 node 返回。
 
 ## 9. rostopic 示例
 

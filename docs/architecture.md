@@ -628,7 +628,7 @@ demo pipeline `xtreme1_collect` 的主要处理链来自 `demo/xtreme1_demo.yaml
 
 ROS control topic 使用单一 `std_msgs/String`，字符串内容是 JSON。`{"command":"start","pipeline":"<pipeline_name>"}` 启动指定 pipeline，`{"command":"pause"}`、`{"command":"resume"}`、`{"command":"stop"}` 分别暂停、恢复、停止当前任务。ROS start service 当前使用 `std_srvs/Trigger`，不能携带 pipeline 参数，只会触发默认 pipeline。stop/status service 也使用 `std_srvs/Trigger`。
 
-`SessionManager.start()` 保证同一时刻最多一个 active session。若已有 active session，新 start 会先调用 `stop(reason="replaced_by_new_start", status=STOPPED)`，再创建新 session。功能测试 `tests/functional/test_session_and_cli.py` 验证了 start、replace、stop 会创建不同 session_id 并生成 session_root。
+`SessionManager.start()` 保证同一时刻最多一个 active session。若已有 active session，新 start 会先调用 `stop(reason="replaced_by_new_start", status=STOPPED)`，在旧 session 完整清理后才查找和创建目标 pipeline。目标名称不存在时，旧 session 已结束，最终保持 `IDLE/STOPPED` 并由控制线程记录 `last_error`。旧 session 清理失败时 `active_session` 仍会清空，但异常向上传播并中止新 session 启动。
 
 ## 18. 会话生命周期
 
@@ -637,15 +637,17 @@ stateDiagram-v2
   [*] --> NoActiveSession
   NoActiveSession --> Starting: SessionManager.start
   Starting --> Running: SessionRuntime.start success
-  Starting --> Failed: node.setup or session setup error
+  Starting --> IdleFailed: precheck/setup/worker start error
+  Starting --> NoActiveSession: unknown pipeline
   Running --> Paused: pause
   Paused --> Running: resume
   Running --> Stopping: stop / shutdown / replace
   Paused --> Stopping: stop / shutdown / replace
   Running --> Completing: max_duration_sec or max_saved_samples
+  Paused --> Completing: queued matching complete
   Completing --> Stopping: complete command
-  Stopping --> IdleStopped: SummaryWriter.write
-  Failed --> IdleFailed: failed summary
+  Stopping --> IdleStopped: cleanup success
+  Stopping --> IdleFailed: cleanup exception
   IdleStopped --> NoActiveSession
   IdleFailed --> NoActiveSession
 ```
@@ -654,16 +656,19 @@ stateDiagram-v2
 
 1. 创建 `session_root`，`exist_ok=False`。
 2. 绑定 session 级 `debug.log` handler。
-3. `_build_nodes()` 创建线程池、实例化节点并执行 setup。
-4. 设置 `_active=True`、`_accepting_frames=True`、运行开始时间。
-5. `StatusManager.set_running(session_id, pipeline.name, start_time)`。
-6. `RosAdapter.bind_session(self)`。
-7. 启动 `runtime.sample_workers` 个 sample worker。
-8. 如配置 `stop_conditions.max_duration_sec`，启动 duration monitor thread。
+3. 如 pipeline 配置了 topic 前置检查，等待每个 topic 在当前窗口内到达新消息。
+4. `_build_nodes()` 创建线程池、实例化节点并执行 setup。
+5. 设置 `_active=True`、`_accepting_frames=True`、运行开始时间。
+6. `StatusManager.set_running(...)` 原子设置 current 字段、清空旧错误并重置 session 指标。
+7. `RosAdapter.bind_session(self)`。
+8. 启动 `runtime.sample_workers` 个 sample worker。
+9. 如配置 `stop_conditions.max_duration_sec`，启动 duration monitor thread。
+
+session 目录创建失败时直接发布 `IDLE/FAILED`，且不会写 summary，以免目录碰撞时覆盖已有 session。目录创建成功后的任一步抛异常，start 回滚会停止接收、设置 cancel、解绑 ROS session、join 已启动线程、逆序 teardown 已 setup 节点并关闭线程池。清理错误与原始启动错误合并到 `last_error`；随后尽可能写 `FAILED/setup_failed` summary，并发布 `IDLE/FAILED`。
 
 `SessionRuntime.stop()`：
 
-1. 设置 `_accepting_frames=False`、`_paused=False`、`_completion_requested=True`。
+1. 设置 `_active=False`、`_accepting_frames=False`、`_paused=False`、`_completion_requested=True`。
 2. 累计 active elapsed time。
 3. 设置 `cancel_event`。
 4. `ros_adapter.unbind_session(self)`。
@@ -672,10 +677,12 @@ stateDiagram-v2
 7. 按 `runtime.stop_timeout_sec` join duration thread。
 8. 按逆序调用节点 `teardown()`。
 9. `ThreadPoolExecutor.shutdown(wait=True)`。
-10. 写 `saved_samples.json`。
-11. 写 `session_summary.json`。
-12. 更新 status 为 idle，并记录 recent session status。
-13. 解绑 session log handler。
+10. 写 `saved_samples.json` 并解绑 session log handler。
+11. 根据聚合错误决定最终 status 和 `<原原因>_failed` end reason。
+12. 尽可能写 `session_summary.json`。
+13. 更新 metrics、`last_error` 和 idle/recent status。
+
+unbind、join、node teardown、线程池关闭、结果写入和日志解绑各自有独立异常边界。某一步抛异常不会阻止后续可执行步骤；任一清理错误都会使最终状态变为 `IDLE/FAILED`，并在完成清理后向控制线程重新抛出聚合错误。
 
 注意：`stop_timeout_sec` 当前只限制 worker 和 duration thread 的 join。节点线程池使用 `shutdown(wait=True)`，已提交节点如果长时间阻塞，stop 仍会等待它们自然返回。
 
@@ -701,12 +708,12 @@ FAILED
 
 | 更新点 | 行为 |
 |---|---|
-| `SessionRuntime.start()` | `set_running(session_id, pipeline, start_time)` |
+| `SessionRuntime.start()` | `set_running(session_id, pipeline, start_time)`；同时清空错误并重置指标 |
 | `SessionRuntime.pause()` | `set_paused()` |
 | `SessionRuntime.resume()` | `set_resumed()` |
 | `SessionRuntime.accept_frame()`、sample 结束、stop | `update_metrics(metrics)` |
 | setup 失败或控制命令异常 | `set_last_error(message)` |
-| `SessionRuntime.stop()` 或 setup 失败 | `set_idle(recent_status)` |
+| `SessionRuntime.stop()` 或 setup 失败 | `set_idle(recent_status)`；同时清空 current 字段和 `start_time` |
 
 `StatusManager` 可接收 `disk_usage_path`。`AppRuntime` 当前传入 `app_config.output_root_dir`，因此对外状态中的 `disk_free_gb` 表示输出根目录所在文件系统的剩余空间，单位为十进制 GB，保留 2 位小数。若磁盘查询失败，该字段为 null。
 
@@ -822,17 +829,19 @@ Xtreme1 保存节点写出的业务文件位于：
 | `calibration.path` 缺失 | `AppRuntime.__init__` 抛出 `ValueError` |
 | ROS message class 解析失败 | `RosAdapter.start()` 在订阅前抛出 `RuntimeError` |
 | pipeline topic 前置检查超时 | start 失败，错误列出缺失 topic，写 FAILED/setup_failed summary，服务继续运行 |
-| 任意 start 命令失败 | 记录异常和 `last_error`，服务继续运行并等待后续命令 |
-| session setup 失败 | 已 setup 节点逆序 teardown，写 FAILED summary，status idle FAILED |
+| IDLE 时 start 的 pipeline 不存在 | 不创建 session，保持 IDLE 和原 recent status，记录 `last_error` |
+| RUNNING/PAUSED 时 start 的 pipeline 不存在 | 旧 session 先以 STOPPED/replaced_by_new_start 结束；随后保持 IDLE 并记录 `last_error` |
+| session setup 失败 | best-effort 释放已创建资源，聚合清理错误，尽可能写 FAILED/setup_failed summary，status IDLE/FAILED |
 | ROS callback 包装或 ingest 异常 | 记录 exception，若有 active session 则 `metrics.error()` |
 | 节点 run 抛异常 | `DagExecutor` 转换为 `FAIL_SAMPLE` |
 | 节点返回 `SKIP_SAMPLE` | 当前样本停止推进，记录 skip |
 | 节点返回 `FAIL_SAMPLE` | 当前样本停止推进，记录 fail |
-| SIGINT/SIGTERM | 投递 shutdown，active session 以 STOPPED 结束 |
+| stop/complete/replace 清理异常 | 继续剩余可执行清理，使用 `<原原因>_failed`，最终 IDLE/FAILED 并向控制线程抛聚合错误 |
+| SIGINT/SIGTERM | 投递 shutdown；即使清理抛异常也会结束 app/control loop |
 | 新 start 替换旧 session | 旧 session 以 `replaced_by_new_start` 和 STOPPED 结束 |
 | `max_duration_sec` 或 `max_saved_samples` 达成 | session 投递 complete 命令，以 COMPLETED 结束 |
 
-当前代码没有通用节点级 retry、on_error 配置、强制取消已运行 future、或将 `FAIL_SESSION` 自动升级为 session stop 的机制。
+当前代码没有通用节点级 retry、on_error 配置、强制取消已运行 future、或将 `FAIL_SESSION` 自动升级为 session stop 的机制。节点线程池仍使用 `shutdown(wait=True)`；永久不返回的 node 不属于上述异常恢复范围。
 
 ## 24. 命令行接口
 

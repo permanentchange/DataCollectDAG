@@ -5,7 +5,7 @@ import logging
 import queue
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from data_collect_dag.cache import SessionInputCache
 from data_collect_dag.control import ControlCommand
@@ -116,9 +116,16 @@ class SessionRuntime:
 
     def start(self) -> None:
         configure_logging("DEBUG" if self.app_config.runtime.debug else None)
-        self.session_root.mkdir(parents=True, exist_ok=False)
-        self._log_handler = attach_session_log_file(self.session_root / "debug.log")
         try:
+            self.session_root.mkdir(parents=True, exist_ok=False)
+        except Exception as exc:
+            self._last_error = str(exc)
+            self.logger.exception("failed to create session directory session_id=%s", self.session_id)
+            self.status_manager.set_last_error(self._last_error)
+            self.status_manager.set_idle(RecentSessionStatus.FAILED)
+            raise
+        try:
+            self._log_handler = attach_session_log_file(self.session_root / "debug.log")
             self._precheck_topics()
             self._build_nodes()
             self._active = True
@@ -162,13 +169,48 @@ class SessionRuntime:
                 )
                 self._duration_thread.start()
         except Exception as exc:
-            self._last_error = str(exc)
             self.logger.exception("session start failed session_id=%s", self.session_id)
-            for node in reversed(list(self._nodes.values())):
+            cleanup_errors: List[str] = []
+            with self._state_condition:
+                self._active = False
+                self._accepting_frames = False
+                self._paused = False
+                self._completion_requested = True
+                self._run_started_monotonic = None
+                self._state_condition.notify_all()
+            self.cancel_event.set()
+            self._run_cleanup_step(cleanup_errors, "unbind_session", lambda: self.ros_adapter.unbind_session(self))
+            for _ in self._workers:
                 try:
-                    node.teardown()
-                except Exception:
+                    self.main_frame_queue.put_nowait(MainFrameEvent(main_frame=None))
+                except queue.Full:
                     pass
+            for index, worker in enumerate(self._workers):
+                self._run_cleanup_step(
+                    cleanup_errors,
+                    f"worker_join[{index}]",
+                    lambda worker=worker: worker.join(timeout=self.app_config.runtime.stop_timeout_sec),
+                )
+            self._workers = []
+            if self._duration_thread is not None:
+                duration_thread = self._duration_thread
+                self._run_cleanup_step(
+                    cleanup_errors,
+                    "duration_thread_join",
+                    lambda: duration_thread.join(timeout=self.app_config.runtime.stop_timeout_sec),
+                )
+                self._duration_thread = None
+            for node_id, node in reversed(list(self._nodes.items())):
+                self._run_cleanup_step(cleanup_errors, f"node_teardown[{node_id}]", node.teardown)
+            if self._node_pool is not None:
+                node_pool = self._node_pool
+                self._run_cleanup_step(cleanup_errors, "node_pool_shutdown", lambda: node_pool.shutdown(wait=True))
+                self._node_pool = None
+            if self._log_handler is not None:
+                log_handler = self._log_handler
+                self._run_cleanup_step(cleanup_errors, "detach_log_handler", lambda: detach_handler(log_handler))
+                self._log_handler = None
+            self._last_error = "; ".join([str(exc)] + cleanup_errors)
             summary = SessionSummary(
                 session_id=self.session_id,
                 pipeline_name=self.pipeline.name,
@@ -184,11 +226,16 @@ class SessionRuntime:
                 last_error=self._last_error,
                 warnings=list(self._warnings),
             )
-            self.summary_writer.write(self.session_root / "session_summary.json", summary)
+            try:
+                self.summary_writer.write(self.session_root / "session_summary.json", summary)
+            except Exception as summary_exc:
+                self.logger.exception("failed to write failed-session summary session_id=%s", self.session_id)
+                cleanup_errors.append(f"write_session_summary: {summary_exc}")
+                self._last_error = "; ".join([str(exc)] + cleanup_errors)
             self.status_manager.set_last_error(self._last_error)
             self.status_manager.set_idle(RecentSessionStatus.FAILED)
-            detach_handler(self._log_handler)
-            self._log_handler = None
+            if cleanup_errors:
+                raise RuntimeError(self._last_error) from exc
             raise
 
     def _precheck_topics(self) -> None:
@@ -208,33 +255,53 @@ class SessionRuntime:
         self.logger.info("stopping session session_id=%s reason=%s status=%s", self.session_id, reason, status.value)
         self._end_reason = reason
         self._end_status = status
+        cleanup_errors: List[str] = []
         with self._state_condition:
             self._accepting_frames = False
             self._paused = False
             self._completion_requested = True
+            self._active = False
             if self._run_started_monotonic is not None:
                 self._active_elapsed_sec += max(0.0, time.monotonic() - self._run_started_monotonic)
                 self._run_started_monotonic = None
             self._state_condition.notify_all()
         self.cancel_event.set()
-        self.ros_adapter.unbind_session(self)
+        self._run_cleanup_step(cleanup_errors, "unbind_session", lambda: self.ros_adapter.unbind_session(self))
         for _ in self._workers:
             try:
                 self.main_frame_queue.put_nowait(MainFrameEvent(main_frame=None))
             except queue.Full:
                 pass
-        for worker in self._workers:
-            worker.join(timeout=self.app_config.runtime.stop_timeout_sec)
+        for index, worker in enumerate(self._workers):
+            self._run_cleanup_step(
+                cleanup_errors,
+                f"worker_join[{index}]",
+                lambda worker=worker: worker.join(timeout=self.app_config.runtime.stop_timeout_sec),
+            )
         self._workers = []
         if self._duration_thread is not None:
-            self._duration_thread.join(timeout=self.app_config.runtime.stop_timeout_sec)
+            duration_thread = self._duration_thread
+            self._run_cleanup_step(
+                cleanup_errors,
+                "duration_thread_join",
+                lambda: duration_thread.join(timeout=self.app_config.runtime.stop_timeout_sec),
+            )
             self._duration_thread = None
-        for node in reversed(list(self._nodes.values())):
-            node.teardown()
+        for node_id, node in reversed(list(self._nodes.items())):
+            self._run_cleanup_step(cleanup_errors, f"node_teardown[{node_id}]", node.teardown)
         if self._node_pool is not None:
-            self._node_pool.shutdown(wait=True)
+            node_pool = self._node_pool
+            self._run_cleanup_step(cleanup_errors, "node_pool_shutdown", lambda: node_pool.shutdown(wait=True))
             self._node_pool = None
-        self._write_sample_records()
+        self._run_cleanup_step(cleanup_errors, "write_saved_samples", self._write_sample_records)
+        if self._log_handler is not None:
+            log_handler = self._log_handler
+            self._run_cleanup_step(cleanup_errors, "detach_log_handler", lambda: detach_handler(log_handler))
+            self._log_handler = None
+        if cleanup_errors:
+            self._end_status = RecentSessionStatus.FAILED
+            self._end_reason = f"{reason}_failed"
+            self._last_error = "; ".join(cleanup_errors)
         summary = SessionSummary(
             session_id=self.session_id,
             pipeline_name=self.pipeline.name,
@@ -250,10 +317,18 @@ class SessionRuntime:
             last_error=self._last_error,
             warnings=list(self._warnings),
         )
-        self.summary_writer.write(self.session_root / "session_summary.json", summary)
+        try:
+            self.summary_writer.write(self.session_root / "session_summary.json", summary)
+        except Exception as exc:
+            self.logger.exception("failed to write session summary session_id=%s", self.session_id)
+            cleanup_errors.append(f"write_session_summary: {exc}")
+            self._end_status = RecentSessionStatus.FAILED
+            self._end_reason = f"{reason}_failed"
+            self._last_error = "; ".join(cleanup_errors)
         self.status_manager.update_metrics(self.metrics.metrics)
+        if self._last_error is not None:
+            self.status_manager.set_last_error(self._last_error)
         self.status_manager.set_idle(self._end_status)
-        self._active = False
         self.logger.info(
             "session stopped session_id=%s samples_started=%s samples_saved=%s samples_skipped=%s samples_failed=%s",
             self.session_id,
@@ -262,8 +337,15 @@ class SessionRuntime:
             self.metrics.metrics.samples_skipped,
             self.metrics.metrics.samples_failed,
         )
-        detach_handler(self._log_handler)
-        self._log_handler = None
+        if cleanup_errors:
+            raise RuntimeError(self._last_error)
+
+    def _run_cleanup_step(self, errors: List[str], stage: str, operation: Callable[[], None]) -> None:
+        try:
+            operation()
+        except Exception as exc:
+            self.logger.exception("session cleanup failed session_id=%s stage=%s", self.session_id, stage)
+            errors.append(f"{stage}: {exc}")
 
     def accept_frame(self, topic_key: str, frame: Any) -> None:
         with self._state_lock:
@@ -356,8 +438,8 @@ class SessionRuntime:
         for node_config in self.pipeline.nodes_by_id.values():
             node_cls = NODE_TYPES[node_config.node_type]
             node = node_cls(node_config, self)
-            node.setup()
             self._nodes[node_config.node_id] = node
+            node.setup()
         self._dag = DagExecutor(self.pipeline, self._nodes, self._node_pool)
         self.logger.debug("built DAG nodes=%s", list(self._nodes))
 
@@ -548,10 +630,10 @@ class SessionManager:
         self.logger = logging.getLogger("data_collect_dag.session_manager")
 
     def start(self, pipeline_name: str) -> SessionRuntime:
-        if pipeline_name not in self.app_config.pipelines:
-            raise KeyError(f"unknown pipeline: {pipeline_name}")
         if self.active_session is not None:
             self.stop(reason="replaced_by_new_start", status=RecentSessionStatus.STOPPED)
+        if pipeline_name not in self.app_config.pipelines:
+            raise KeyError(f"unknown pipeline: {pipeline_name}")
         self.logger.info("starting session for pipeline=%s", pipeline_name)
         session = SessionRuntime(
             app_config=self.app_config,
@@ -569,8 +651,10 @@ class SessionManager:
         if self.active_session is None:
             return
         self.logger.info("stopping active session reason=%s status=%s", reason, status.value)
-        self.active_session.stop(reason=reason, status=status)
-        self.active_session = None
+        try:
+            self.active_session.stop(reason=reason, status=status)
+        finally:
+            self.active_session = None
 
     def pause(self) -> None:
         if self.active_session is None:

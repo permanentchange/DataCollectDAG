@@ -139,9 +139,11 @@ class AppRuntime:
             )
             return
         if command.kind == "shutdown":
-            self.session_manager.stop(reason=command.reason or "external_stop", status=RecentSessionStatus.STOPPED)
-            self._stop_event.set()
-            self._control_stop_event.set()
+            try:
+                self.session_manager.stop(reason=command.reason or "external_stop", status=RecentSessionStatus.STOPPED)
+            finally:
+                self._stop_event.set()
+                self._control_stop_event.set()
             return
         raise ValueError(f"unknown control command: {command.kind}")
 

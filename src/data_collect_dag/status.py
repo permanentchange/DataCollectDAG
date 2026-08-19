@@ -20,6 +20,17 @@ class StatusManager:
             self._snapshot.current_session_id = session_id
             self._snapshot.current_pipeline_name = pipeline_name
             self._snapshot.start_time = start_time
+            self._snapshot.last_error = None
+            self._snapshot.warnings = 0
+            self._snapshot.received_messages = {}
+            self._snapshot.main_frame_events = 0
+            self._snapshot.samples_saved = 0
+            self._snapshot.samples_skipped = 0
+            self._snapshot.samples_failed = 0
+            self._snapshot.samples_canceled = 0
+            self._snapshot.drop_reasons = {}
+            self._snapshot.skip_reasons = {}
+            self._snapshot.fail_reasons = {}
 
     def set_paused(self) -> None:
         with self._lock:
@@ -35,6 +46,7 @@ class StatusManager:
             self._snapshot.recent_session_status = recent_status
             self._snapshot.current_session_id = None
             self._snapshot.current_pipeline_name = None
+            self._snapshot.start_time = None
 
     def update_metrics(self, metrics: SessionMetrics) -> None:
         with self._lock:
