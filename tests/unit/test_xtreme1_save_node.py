@@ -1,13 +1,14 @@
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from PIL import Image
 
 from data_collect_dag.models import NodeConfig, NodeResult, PointCloudFrame, TopicConfig
-from data_collect_dag.nodes.xtreme1 import Xtreme1SaveNode
+from data_collect_dag.nodes.xtreme1 import Xtreme1SaveNode, _build_camera_config
 from data_collect_dag.sample_context import SampleContext
 from tests.unit.conftest import make_meta
 
@@ -46,7 +47,7 @@ def test_xtreme1_save_node_uses_ordered_generic_camera_bindings(dummy_session, i
     sample.metadata["undistort_camera_params"] = {
         "front_wide_camera": {
             "camera_matrix": [[500.0, 0.0, 480.0], [0.0, 500.0, 270.0], [0.0, 0.0, 1.0]],
-            "resolution": [960, 540],
+            "resolution": [6, 4],
         }
     }
     inputs = {
@@ -232,3 +233,71 @@ def test_xtreme1_save_node_requires_base_frame_pointcloud(dummy_session, image_f
 
     assert result.status == NodeResult.FAIL_SAMPLE
     assert result.reason == "save_pointcloud_not_in_base"
+
+
+def test_build_camera_config_scales_intrinsics_to_image_resolution():
+    base2camera = np.arange(16, dtype=np.float64).reshape(4, 4).tolist()
+    camera_params = {
+        "camera_matrix": [[1000.0, 0.0, 960.0], [0.0, 800.0, 540.0], [0.0, 0.0, 1.0]],
+        "resolution": [1920, 1080],
+        "base2camera": base2camera,
+    }
+
+    result = _build_camera_config(camera_params, SimpleNamespace(width=960, height=270))
+
+    assert result["camera_internal"] == {
+        "fx": 500.0,
+        "fy": 200.0,
+        "cx": 480.0,
+        "cy": 135.0,
+    }
+    assert result["width"] == 960
+    assert result["height"] == 270
+    assert result["camera_external"] == np.asarray(base2camera).reshape(-1, order="F").tolist()
+
+
+def test_build_camera_config_does_not_rescale_matching_resolution():
+    camera_params = {
+        "camera_matrix": [[1000.0, 0.0, 960.0], [0.0, 800.0, 540.0], [0.0, 0.0, 1.0]],
+        "resolution": [1920, 1080],
+        "base2camera": np.eye(4).tolist(),
+    }
+
+    result = _build_camera_config(camera_params, SimpleNamespace(width=1920, height=1080))
+
+    assert result["camera_internal"] == {
+        "fx": 1000.0,
+        "fy": 800.0,
+        "cx": 960.0,
+        "cy": 540.0,
+    }
+
+
+def test_build_camera_config_preserves_intrinsics_without_calibration_resolution():
+    camera_params = {
+        "camera_matrix": [[1000.0, 0.0, 960.0], [0.0, 800.0, 540.0], [0.0, 0.0, 1.0]],
+        "base2camera": np.eye(4).tolist(),
+    }
+
+    result = _build_camera_config(camera_params, SimpleNamespace(width=960, height=540))
+
+    assert result["camera_internal"] == {
+        "fx": 1000.0,
+        "fy": 800.0,
+        "cx": 960.0,
+        "cy": 540.0,
+    }
+    assert result["width"] == 960
+    assert result["height"] == 540
+
+
+@pytest.mark.parametrize("resolution", ([0, 1080], [1920], ["bad", 1080]))
+def test_build_camera_config_rejects_invalid_calibration_resolution(resolution):
+    camera_params = {
+        "camera_matrix": [[1000.0, 0.0, 960.0], [0.0, 800.0, 540.0], [0.0, 0.0, 1.0]],
+        "resolution": resolution,
+        "base2camera": np.eye(4).tolist(),
+    }
+
+    with pytest.raises(ValueError, match="camera calibration resolution"):
+        _build_camera_config(camera_params, SimpleNamespace(width=960, height=540))

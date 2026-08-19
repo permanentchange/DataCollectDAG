@@ -268,6 +268,51 @@ pipelines:
           max_time_diff_ms: 20
           wait_timeout_ms: 400
           required: true
+      - node_id: undistort_front_ext
+        type: image_undistort
+        inputs:
+          image: main_frame
+        outputs:
+          image: front_ext_camera_undistorted
+        config:
+          source: front_ext_camera
+          write_debug_artifacts: false
+      - node_id: undistort_front
+        type: image_undistort
+        inputs:
+          image: front_camera
+        outputs:
+          image: front_camera_undistorted
+        config:
+          source: front_camera
+          write_debug_artifacts: false
+      - node_id: undistort_rear
+        type: image_undistort
+        inputs:
+          image: rear_camera
+        outputs:
+          image: rear_camera_undistorted
+        config:
+          source: rear_camera
+          write_debug_artifacts: false
+      - node_id: undistort_left
+        type: image_undistort
+        inputs:
+          image: left_camera
+        outputs:
+          image: left_camera_undistorted
+        config:
+          source: left_camera
+          write_debug_artifacts: false
+      - node_id: undistort_right
+        type: image_undistort
+        inputs:
+          image: right_camera
+        outputs:
+          image: right_camera_undistorted
+        config:
+          source: right_camera
+          write_debug_artifacts: false
       - node_id: top_lidar_motion
         type: pointcloud_motion_compensation
         inputs:
@@ -348,11 +393,11 @@ pipelines:
         type: xtreme1_structured_save
         inputs:
           pointcloud: aggregated_pointcloud
-          camera_0: main_frame
-          camera_1: front_camera
-          camera_2: rear_camera
-          camera_3: left_camera
-          camera_4: right_camera
+          camera_0: front_ext_camera_undistorted
+          camera_1: front_camera_undistorted
+          camera_2: rear_camera_undistorted
+          camera_3: left_camera_undistorted
+          camera_4: right_camera_undistorted
         config:
           dataset_name: collect_demo
           cameras:
@@ -377,6 +422,11 @@ pipelines:
       - [fps_guard, sync_top_lidar]
       - [fps_guard, sync_corner_lidars]
       - [fps_guard, sync_images]
+      - [fps_guard, undistort_front_ext]
+      - [sync_images, undistort_front]
+      - [sync_images, undistort_rear]
+      - [sync_images, undistort_left]
+      - [sync_images, undistort_right]
       - [sync_top_lidar, top_lidar_motion]
       - [sync_corner_lidars, front_left_motion]
       - [sync_corner_lidars, front_right_motion]
@@ -388,6 +438,10 @@ pipelines:
       - [rear_left_motion, aggregate_pointclouds]
       - [rear_right_motion, aggregate_pointclouds]
       - [aggregate_pointclouds, save_xtreme1]
-      - [sync_images, save_xtreme1]
+      - [undistort_front_ext, save_xtreme1]
+      - [undistort_front, save_xtreme1]
+      - [undistort_rear, save_xtreme1]
+      - [undistort_left, save_xtreme1]
+      - [undistort_right, save_xtreme1]
       - [save_xtreme1, fps_marker]
       - [fps_marker, end]

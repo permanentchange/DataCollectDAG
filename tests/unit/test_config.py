@@ -138,15 +138,16 @@ def test_all_demo_xtreme1_nodes_use_generic_camera_bindings():
 
 def test_load_sa4_fps_uses_ordered_generic_camera_bindings():
     config = load_app_config(Path("demo/cfg_sa4.yaml"))
-    save_node = config.pipelines["fps"].nodes_by_id["save_xtreme1"]
+    pipeline = config.pipelines["fps"]
+    save_node = pipeline.nodes_by_id["save_xtreme1"]
 
     assert save_node.inputs == {
         "pointcloud": "aggregated_pointcloud",
-        "camera_0": "main_frame",
-        "camera_1": "front_camera",
-        "camera_2": "rear_camera",
-        "camera_3": "left_camera",
-        "camera_4": "right_camera",
+        "camera_0": "front_ext_camera_undistorted",
+        "camera_1": "front_camera_undistorted",
+        "camera_2": "rear_camera_undistorted",
+        "camera_3": "left_camera_undistorted",
+        "camera_4": "right_camera_undistorted",
     }
     assert save_node.config["cameras"] == [
         {"input_name": "camera_0", "topic_key": "front_ext_camera"},
@@ -155,6 +156,28 @@ def test_load_sa4_fps_uses_ordered_generic_camera_bindings():
         {"input_name": "camera_3", "topic_key": "left_camera"},
         {"input_name": "camera_4", "topic_key": "right_camera"},
     ]
+    undistort_specs = {
+        "undistort_front_ext": ("main_frame", "front_ext_camera_undistorted", "front_ext_camera", "fps_guard"),
+        "undistort_front": ("front_camera", "front_camera_undistorted", "front_camera", "sync_images"),
+        "undistort_rear": ("rear_camera", "rear_camera_undistorted", "rear_camera", "sync_images"),
+        "undistort_left": ("left_camera", "left_camera_undistorted", "left_camera", "sync_images"),
+        "undistort_right": ("right_camera", "right_camera_undistorted", "right_camera", "sync_images"),
+    }
+    for node_id, (input_key, output_key, source, predecessor) in undistort_specs.items():
+        node = pipeline.nodes_by_id[node_id]
+        assert node.node_type == "image_undistort"
+        assert node.inputs == {"image": input_key}
+        assert node.outputs == {"image": output_key}
+        assert node.config == {"source": source, "write_debug_artifacts": False}
+        assert pipeline.predecessors[node_id] == [predecessor]
+    assert set(pipeline.predecessors["save_xtreme1"]) == {
+        "aggregate_pointclouds",
+        "undistort_front_ext",
+        "undistort_front",
+        "undistort_rear",
+        "undistort_left",
+        "undistort_right",
+    }
 
 
 def test_demo_collection_pipelines_disable_undistort_debug_artifacts():

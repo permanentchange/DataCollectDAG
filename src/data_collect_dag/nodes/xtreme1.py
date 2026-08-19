@@ -138,15 +138,27 @@ def _resolve_camera_bindings(
 
 def _build_camera_config(camera_params: Dict[str, Any], image) -> Dict[str, Any]:
     matrix = np.asarray(camera_params["camera_matrix"], dtype=np.float64)
-    resolution = list(camera_params.get("resolution") or [0, 0])
-    width = int(image.width) if image is not None else int(resolution[0])
-    height = int(image.height) if image is not None else int(resolution[1])
+    calibration_resolution = camera_params.get("resolution")
+    calibration_width = 0
+    calibration_height = 0
+    if calibration_resolution is not None:
+        try:
+            calibration_width, calibration_height = (int(value) for value in calibration_resolution)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("camera calibration resolution must contain two positive integers") from exc
+        if calibration_width <= 0 or calibration_height <= 0:
+            raise ValueError("camera calibration resolution must contain two positive integers")
+
+    width = int(image.width) if image is not None else calibration_width
+    height = int(image.height) if image is not None else calibration_height
+    scale_x = float(width) / float(calibration_width) if image is not None and calibration_width else 1.0
+    scale_y = float(height) / float(calibration_height) if image is not None and calibration_height else 1.0
     return {
         "camera_internal": {
-            "fx": float(matrix[0][0]),
-            "fy": float(matrix[1][1]),
-            "cx": float(matrix[0][2]),
-            "cy": float(matrix[1][2]),
+            "fx": float(matrix[0][0]) * scale_x,
+            "fy": float(matrix[1][1]) * scale_y,
+            "cx": float(matrix[0][2]) * scale_x,
+            "cy": float(matrix[1][2]) * scale_y,
         },
         "width": width,
         "height": height,
