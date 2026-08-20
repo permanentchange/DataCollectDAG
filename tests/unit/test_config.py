@@ -37,6 +37,15 @@ def test_load_demo_config():
     assert pipeline.stop_conditions.max_saved_samples is None
 
 
+def test_cfg_corner_lidars_sync_to_top_lidar():
+    config = load_app_config(Path("demo/cfg.yaml"))
+
+    for pipeline_name in ("init", "fps", "fps_with_yolo"):
+        pipeline = config.pipelines[pipeline_name]
+        assert pipeline.nodes_by_id["sync_corner_lidars"].inputs["reference_frame"] == "top_lidar_synced"
+        assert pipeline.predecessors["sync_corner_lidars"] == ["sync_top_lidar"]
+
+
 def test_load_pipeline_topic_precheck_config(tmp_path):
     payload = yaml.safe_load(Path("demo/xtreme1_demo.yaml").read_text(encoding="utf-8"))
     pipeline = payload["pipelines"]["init"]

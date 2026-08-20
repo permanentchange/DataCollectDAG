@@ -145,7 +145,7 @@ pipelines:
       - node_id: sync_corner_lidars
         type: multi_time_sync
         inputs:
-          reference_frame: main_frame
+          reference_frame: top_lidar_synced
         outputs:
           front_left_lidar: front_left_lidar
           front_right_lidar: front_right_lidar
@@ -184,7 +184,7 @@ pipelines:
         type: end
     edges:
       - [start, sync_top_lidar]
-      - [start, sync_corner_lidars]
+      - [sync_top_lidar, sync_corner_lidars]
       - [start, sync_images]
       - [sync_top_lidar, end]
       - [sync_corner_lidars, end]
@@ -233,7 +233,7 @@ pipelines:
       - node_id: sync_corner_lidars
         type: multi_time_sync
         inputs:
-          reference_frame: main_frame
+          reference_frame: top_lidar_synced
         outputs:
           front_left_lidar: front_left_lidar
           front_right_lidar: front_right_lidar
@@ -420,7 +420,7 @@ pipelines:
     edges:
       - [start, fps_guard]
       - [fps_guard, sync_top_lidar]
-      - [fps_guard, sync_corner_lidars]
+      - [sync_top_lidar, sync_corner_lidars]
       - [fps_guard, sync_images]
       - [fps_guard, undistort_front_ext]
       - [sync_images, undistort_front]
@@ -536,7 +536,7 @@ pipelines:
       - node_id: sync_corner_lidars
         type: multi_time_sync
         inputs:
-          reference_frame: main_frame
+          reference_frame: top_lidar_synced
         outputs:
           front_left_lidar: front_left_lidar
           front_right_lidar: front_right_lidar
@@ -725,7 +725,7 @@ pipelines:
       - [fps_guard, sync_images]
       - [sync_images, front_camera_yolo_gate]
       - [front_camera_yolo_gate, sync_top_lidar]
-      - [front_camera_yolo_gate, sync_corner_lidars]
+      - [sync_top_lidar, sync_corner_lidars]
       - [front_camera_yolo_gate, undistort_front_ext]
       - [front_camera_yolo_gate, undistort_front]
       - [front_camera_yolo_gate, undistort_rear]
