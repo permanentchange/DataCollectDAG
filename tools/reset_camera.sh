@@ -7,17 +7,18 @@ NODES=(
 "/miivii_gmsl_camera_node"
 )
 
-if ! rosnode list >/dev/null 2>&1; then
+rosnode list >/dev/null 2>&1 || {
     echo "[ERROR] ROS master unavailable"
     exit 1
-fi
+}
 
 for node in "${NODES[@]}"; do
     if rosnode list | grep -qx "$node"; then
         echo "[INFO] stopping $node"
         rosnode kill "$node"
 
-        while rosnode list 2>/dev/null | grep -qx "$node"; do
+        for i in {1..50}; do
+            rosnode list 2>/dev/null | grep -qx "$node" || break
             sleep 0.2
         done
 
@@ -27,7 +28,9 @@ for node in "${NODES[@]}"; do
     fi
 done
 
-sleep 2
-
 echo "[INFO] launching data_collect.launch"
-roslaunch miivii_gmsl_camera data_collect.launch
+
+roslaunch miivii_gmsl_camera data_collect.launch \
+    > /tmp/data_collect.launch.log 2>&1 &
+
+echo "[INFO] launch pid: $!"
