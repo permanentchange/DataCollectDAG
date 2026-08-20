@@ -489,7 +489,11 @@ pipelines:
           confidence_thresholds:
             - 0.00025
             - 0.00025
+            - 0.00025
+            - 0.00025
           min_area_ratios:
+            - 0.00001
+            - 0.00001
             - 0.00001
             - 0.00001
           predict_conf: 0.00025
