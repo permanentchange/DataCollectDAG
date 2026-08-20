@@ -497,7 +497,7 @@ pipelines:
             - 0.00001
             - 0.00001
           predict_conf: 0.00025
-          device: cpu
+          device: gpu
           imgsz: 640
           failure_policy: skip_sample
       - node_id: sync_top_lidar
