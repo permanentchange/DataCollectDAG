@@ -482,21 +482,42 @@ pipelines:
         config:
           model_path: demo/models/yolo26m.pt
           class_names:
-            - person
-            - car
-            - bus
-            - truck
+            - bicycle
+            - electric_bicycle  # 电动车：需自定义模型标签
+            - motorcycle        # 当前 COCO 模型可识别
+            - person            # 当前 COCO 模型可识别
+            - tricycle
+            - traffic_cone
+            - trash_can
+            - bollard
+            - cat
+            - dog
+            - horse
           confidence_thresholds:
-            - 0.00025
-            - 0.00025
-            - 0.00025
-            - 0.00025
+            - 0.25
+            - 0.25
+            - 0.25
+            - 0.25
+            - 0.25
+            - 0.25
+            - 0.25
+            - 0.25
+            - 0.25
+            - 0.25
+            - 0.25
           min_area_ratios:
-            - 0.00001
-            - 0.00001
-            - 0.00001
-            - 0.00001
-          predict_conf: 0.00025
+            - 0.0002    # bicycle
+            - 0.0002    # electric_bicycle
+            - 0.0003    # motorcycle
+            - 0.00015   # person
+            - 0.00015   # tricycle
+            - 0.00003   # traffic_cone
+            - 0.00005   # trash_can
+            - 0.00003   # bollard
+            - 0.00003   # cat
+            - 0.00008   # dog
+            - 0.00015   # horse
+          predict_conf: 0.2
           device: gpu
           imgsz: 640
           failure_policy: skip_sample
