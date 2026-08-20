@@ -32,6 +32,12 @@ def read_ros(topics,img):
 def main(base,bt,d):
     print(f"\nMain: {base} ({len(bt)} msgs)\nOffset(sensor-main):")
     for k,ts in d.items():
+        if not bt:
+            print(f"{k}: n/a (main topic has no messages)")
+            continue
+        if not ts:
+            print(f"{k}: n/a (sensor topic has no messages)")
+            continue
         r=[]
         for t in bt:
             i=bisect.bisect_left(ts,t)
