@@ -1,562 +1,386 @@
 #!/usr/bin/env python3
-"""Low-overhead resource monitor for NVIDIA Jetson Orin NX.
-
-Uses NVIDIA tegrastats as the primary Jetson source and /proc/sysfs for
-system-level deltas. Requires only Python 3 standard library.
-"""
-
-import argparse
-import csv
-import glob
-import os
-import re
-import shutil
-import signal
-import subprocess
-import sys
-import time
+import argparse,csv,glob,os,re,shutil,subprocess,sys,time
 from datetime import datetime
 
+VERSION="2.1.0"
+TEMPS=["cpu","gpu","cv0","cv1","cv2","soc0","soc1","soc2","tj"]
+VIRTUAL_NET=("lo","docker","veth","br-","l4tbr","virbr")
 
-CPU_COUNT = os.cpu_count() or 8
-TEMP_NAMES = ["cpu", "gpu", "cv0", "cv1", "cv2", "soc0", "soc1", "soc2", "tj"]
-TEGRA_POWER_RAILS = ["vdd_in", "vdd_cpu_gpu_cv", "vdd_soc"]
-
-
-def _number(text):
-    return None if text is None else float(text)
-
-
-def _norm(text):
-    return re.sub(r"[^a-z0-9]+", "_", text.strip().lower()).strip("_")
-
-
-def parse_tegrastats_line(line):
-    """Parse one tegrastats line into a flat dictionary."""
-    out = {}
-
-    m = re.search(r"\bRAM\s+(\d+)/(\d+)MB", line)
-    if m:
-        out["ram_used_mb"] = int(m.group(1))
-        out["ram_total_mb"] = int(m.group(2))
-
-    m = re.search(r"\(lfb\s+(\d+)x(\d+)MB\)", line)
-    if m:
-        out["lfb_blocks"] = int(m.group(1))
-        out["lfb_block_mb"] = int(m.group(2))
-
-    m = re.search(r"\bSWAP\s+(\d+)/(\d+)MB", line)
-    if m:
-        out["swap_used_mb"] = int(m.group(1))
-        out["swap_total_mb"] = int(m.group(2))
-
-    m = re.search(r"\bCPU\s*\[([^]]+)\]", line)
-    if m:
-        for i, token in enumerate(m.group(1).split(",")):
-            token = token.strip()
-            if token.lower() == "off":
-                out[f"cpu{i}_state"] = "off"
-                out[f"cpu{i}_pct"] = None
-                out[f"cpu{i}_mhz"] = None
-                continue
-            cm = re.match(r"([\d.]+)%(?:@([\d.]+))?", token)
-            if cm:
-                out[f"cpu{i}_state"] = "on"
-                out[f"cpu{i}_pct"] = _number(cm.group(1))
-                out[f"cpu{i}_mhz"] = _number(cm.group(2))
-
-    def parse_freq(prefix, pct_key, mhz_key):
-        fm = re.search(rf"\b{re.escape(prefix)}\s+([\d.]+)%(?:@([\d.]+))?", line)
-        if fm:
-            out[pct_key] = _number(fm.group(1))
-            out[mhz_key] = _number(fm.group(2))
-
-    parse_freq("EMC_FREQ", "emc_pct", "emc_mhz")
-    parse_freq("GR3D_FREQ", "gpu_pct", "gpu_mhz")
-    parse_freq("GR3D2_FREQ", "gr3d2_pct", "gr3d2_mhz")
-
-    for name, value in re.findall(r"\b([A-Za-z][A-Za-z0-9_]*)@(-?[\d.]+)C\b", line):
-        key = _norm(name)
-        if key in TEMP_NAMES:
-            out[f"temp_{key}_c"] = float(value)
-
-    # Typical format: VDD_IN 12600mW/12000mW
-    for rail, current, average in re.findall(
-        r"\b([A-Z][A-Z0-9_]+)\s+([\d.]+)mW/([\d.]+)mW", line
-    ):
-        key = _norm(rail)
-        out[f"power_{key}_mw"] = float(current)
-        out[f"power_{key}_avg_mw"] = float(average)
-
-    return out
-
-
-def infer_cpu_count(parsed, fallback):
-    indices = []
-    for key in parsed:
-        m = re.fullmatch(r"cpu(\d+)_pct", key)
-        if m:
-            indices.append(int(m.group(1)))
-    return max(indices) + 1 if indices else fallback
-
-
-def read_proc_stat(path="/proc/stat"):
-    result = {}
-    with open(path, "r", encoding="ascii", errors="replace") as f:
-        for line in f:
-            if not line.startswith("cpu"):
-                break
-            parts = line.split()
-            result[parts[0]] = [int(x) for x in parts[1:]]
-    return result
-
-
-def cpu_usage_delta(prev, curr):
-    a = prev.get("cpu")
-    b = curr.get("cpu")
-    if not a or not b:
-        return None, None
-    n = min(len(a), len(b))
-    delta = [max(0, b[i] - a[i]) for i in range(n)]
-    total = sum(delta)
-    if total <= 0:
-        return None, None
-    idle = delta[3] if n > 3 else 0
-    iowait = delta[4] if n > 4 else 0
-    busy_pct = 100.0 * max(0, total - idle - iowait) / total
-    iowait_pct = 100.0 * iowait / total
-    return busy_pct, iowait_pct
-
-
-def read_diskstats(path="/proc/diskstats"):
-    out = {}
-    with open(path, "r", encoding="ascii", errors="replace") as f:
-        for line in f:
-            p = line.split()
-            if len(p) < 14:
-                continue
-            out[p[2]] = {
-                "read_sectors": int(p[5]),
-                "write_sectors": int(p[9]),
-                "io_ms": int(p[12]),
-            }
-    return out
-
-
-def disk_rates(prev, curr, elapsed_s, devices):
-    if elapsed_s <= 0:
-        return None, None, None
-    read_sectors = write_sectors = io_ms = 0
-    found = False
-    for dev in devices:
-        if dev not in prev or dev not in curr:
-            continue
-        found = True
-        read_sectors += max(0, curr[dev]["read_sectors"] - prev[dev]["read_sectors"])
-        write_sectors += max(0, curr[dev]["write_sectors"] - prev[dev]["write_sectors"])
-        io_ms += max(0, curr[dev]["io_ms"] - prev[dev]["io_ms"])
-    if not found:
-        return None, None, None
-    # Linux /proc/diskstats sector counters are expressed in 512-byte sectors.
-    read_mib_s = read_sectors * 512.0 / (1024.0 * 1024.0) / elapsed_s
-    write_mib_s = write_sectors * 512.0 / (1024.0 * 1024.0) / elapsed_s
-    busy_pct = io_ms / (elapsed_s * 1000.0) * 100.0
-    return read_mib_s, write_mib_s, busy_pct
-
-
-def read_netdev(path="/proc/net/dev"):
-    out = {}
-    with open(path, "r", encoding="ascii", errors="replace") as f:
-        for line in f:
-            if ":" not in line:
-                continue
-            name, values = line.split(":", 1)
-            p = values.split()
-            if len(p) >= 16:
-                out[name.strip()] = (int(p[0]), int(p[8]))
-    return out
-
-
-def net_rates(prev, curr, elapsed_s, interfaces):
-    if elapsed_s <= 0:
-        return None, None
-    rx = tx = 0
-    found = False
-    for iface in interfaces:
-        if iface not in prev or iface not in curr:
-            continue
-        found = True
-        rx += max(0, curr[iface][0] - prev[iface][0])
-        tx += max(0, curr[iface][1] - prev[iface][1])
-    if not found:
-        return None, None
-    scale = 1024.0 * 1024.0 * elapsed_s
-    return rx / scale, tx / scale
-
-
-def read_meminfo(path="/proc/meminfo"):
-    wanted = {"MemTotal", "MemAvailable", "MemFree", "Cached", "SwapTotal", "SwapFree"}
-    out = {}
-    with open(path, "r", encoding="ascii", errors="replace") as f:
-        for line in f:
-            if ":" not in line:
-                continue
-            key, rest = line.split(":", 1)
-            if key in wanted:
-                try:
-                    out[key] = int(rest.split()[0]) / 1024.0
-                except (ValueError, IndexError):
-                    pass
-    return out
-
-
-def read_loadavg(path="/proc/loadavg"):
+def read_text(p):
     try:
-        p = open(path, "r", encoding="ascii").read().split()
-        running, total = p[3].split("/", 1)
-        return float(p[0]), float(p[1]), float(p[2]), int(running), int(total)
-    except (OSError, ValueError, IndexError):
-        return None, None, None, None, None
+        with open(p,"r",encoding="utf-8",errors="replace") as f:return f.read().strip()
+    except OSError:return None
 
+def read_float(p):
+    s=read_text(p)
+    try:return float(s.split()[0]) if s is not None else None
+    except (ValueError,IndexError):return None
 
-def discover_block_devices():
-    devices = []
-    for path in sorted(glob.glob("/sys/block/*")):
-        name = os.path.basename(path)
-        if name.startswith(("loop", "ram", "zram", "fd", "sr")):
-            continue
-        devices.append(name)
-    return devices
+def norm(s):return re.sub(r"[^a-z0-9]+","_",str(s).strip().lower()).strip("_")
 
+def parse_duration(s):
+    if s is None:return None
+    m=re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([smhd]?)",s.strip().lower())
+    if not m:raise argparse.ArgumentTypeError("duration: 30s / 10m / 1.5h / 1d")
+    return float(m.group(1))*{"":1,"s":1,"m":60,"h":3600,"d":86400}[m.group(2)]
 
-def discover_network_interfaces():
-    skip_exact = {"lo", "docker0", "l4tbr0"}
-    skip_prefix = ("veth", "br-", "can")
-    result = []
-    for path in sorted(glob.glob("/sys/class/net/*")):
-        name = os.path.basename(path)
-        if name in skip_exact or name.startswith(skip_prefix):
-            continue
-        result.append(name)
-    return result
-
-
-def discover_devfreq_sources():
-    sources = {}
-    for path in glob.glob("/sys/class/devfreq/*"):
-        name = os.path.basename(path).lower()
-        try:
-            n = open(os.path.join(path, "name"), "r", encoding="ascii").read().strip().lower()
-            name += " " + n
-        except OSError:
-            pass
-        cur = os.path.join(path, "cur_freq")
-        if not os.path.isfile(cur):
-            continue
-        if "emc" in name and "emc" not in sources:
-            sources["emc"] = cur
-        if any(marker in name for marker in ("ga10b", "gpu", "17000000")) and "gpu" not in sources:
-            sources["gpu"] = cur
-    return sources
-
-
-def read_devfreq_mhz(path):
-    if not path:
-        return None
-    try:
-        v = float(open(path, "r", encoding="ascii").read().strip())
-    except (OSError, ValueError):
-        return None
-    # devfreq cur_freq is normally Hz; tolerate kHz sources as well.
-    if v >= 10_000_000:
-        return v / 1_000_000.0
-    if v >= 10_000:
-        return v / 1000.0
+def freq_mhz(v):
+    if v is None:return None
+    v=float(v)
+    if abs(v)>=10_000_000:return v/1_000_000
+    if abs(v)>=100_000:return v/1_000
     return v
 
+def parse_ts(line):
+    o={"cpu":[],"ram_used_mb":None,"ram_total_mb":None,"swap_used_mb":None,"swap_total_mb":None,
+       "swap_cached_mb":None,"lfb_count":None,"lfb_size_mb":None,"gpu_pct":None,"gpu_mhz":None,
+       "gr3d2_pct":None,"gr3d2_mhz":None,"emc_pct":None,"emc_mhz":None}
 
-def discover_hwmon_power_sensors():
-    """Discover direct power inputs or INA-style voltage/current pairs once."""
-    result = {}
-    for hw in glob.glob("/sys/class/hwmon/hwmon*"):
-        try:
-            hwname = open(os.path.join(hw, "name"), "r", encoding="ascii").read().strip()
-        except OSError:
-            hwname = os.path.basename(hw)
+    m=re.search(r"\bRAM\s+(\d+)/(\d+)MB",line)
+    if m:o["ram_used_mb"],o["ram_total_mb"]=map(int,m.groups())
 
-        # Direct power*_input values use microwatts per hwmon ABI.
-        for p in glob.glob(os.path.join(hw, "power*_input")):
-            stem = os.path.basename(p).split("_")[0]
-            label_path = os.path.join(hw, stem + "_label")
-            try:
-                label = open(label_path, "r", encoding="ascii").read().strip()
-            except OSError:
-                label = f"{hwname}_{stem}"
-            key = _norm(label)
-            if key:
-                result.setdefault(key, ("uw", p, None))
+    m=re.search(r"\(lfb\s+(\d+)x(\d+)MB\)",line)
+    if m:o["lfb_count"],o["lfb_size_mb"]=map(int,m.groups())
 
-        # INA3221 commonly exposes inN_input (mV) + currN_input (mA).
-        for vp in glob.glob(os.path.join(hw, "in*_input")):
-            m = re.match(r"in(\d+)_input$", os.path.basename(vp))
-            if not m:
-                continue
-            idx = m.group(1)
-            cp = os.path.join(hw, f"curr{idx}_input")
-            if not os.path.isfile(cp):
-                continue
-            labels = [os.path.join(hw, f"in{idx}_label"), os.path.join(hw, f"curr{idx}_label")]
-            label = None
-            for lp in labels:
-                try:
-                    label = open(lp, "r", encoding="ascii").read().strip()
-                    if label:
-                        break
-                except OSError:
-                    pass
-            key = _norm(label or f"{hwname}_ch{idx}")
-            if key:
-                result.setdefault(key, ("mv_ma", vp, cp))
-    return result
+    m=re.search(r"\bSWAP\s+(\d+)/(\d+)MB(?:\s+\(cached\s+(\d+)MB\))?",line)
+    if m:
+        o["swap_used_mb"],o["swap_total_mb"]=int(m.group(1)),int(m.group(2))
+        if m.group(3):o["swap_cached_mb"]=int(m.group(3))
 
+    m=re.search(r"\bCPU\s*\[([^\]]*)\](?:@(\d+(?:\.\d+)?))?",line)
+    if m:
+        shared=float(m.group(2)) if m.group(2) else None
+        for x in m.group(1).split(","):
+            x=x.strip()
+            if x.lower()=="off":o["cpu"].append({"pct":None,"mhz":None});continue
+            cm=re.match(r"([0-9.]+)%?(?:@(\d+(?:\.\d+)?))?",x)
+            if cm:o["cpu"].append({"pct":float(cm.group(1)),"mhz":float(cm.group(2)) if cm.group(2) else shared})
 
-def read_hwmon_power_mw(sensor):
-    kind, a, b = sensor
+    for key,pat in (
+        ("emc",r"\bEMC_FREQ\s+([0-9.]+)%(?:@(\d+(?:\.\d+)?))?"),
+        ("gpu",r"\bGR3D_FREQ\s+([0-9.]+)%(?:@(\d+(?:\.\d+)?))?"),
+        ("gr3d2",r"\bGR3D2_FREQ\s+([0-9.]+)%(?:@(\d+(?:\.\d+)?))?")
+    ):
+        m=re.search(pat,line)
+        if m:
+            o[f"{key}_pct"]=float(m.group(1))
+            if m.group(2):o[f"{key}_mhz"]=float(m.group(2))
+
+    for m in re.finditer(r"\b([A-Za-z][A-Za-z0-9_-]*)@(-?[0-9.]+)C\b",line):
+        o[f"temp_{norm(m.group(1))}_c"]=float(m.group(2))
+    return o
+
+def find_ts():
+    p=shutil.which("tegrastats")
+    if p:return p
+    for p in ("/usr/bin/tegrastats","/home/nvidia/tegrastats"):
+        if os.path.isfile(p) and os.access(p,os.X_OK):return p
+    return None
+
+def start_ts(path,interval):
+    return subprocess.Popen([path,"--interval",str(max(20,round(interval*1000)))],
+        stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+
+def next_ts(proc):
+    if not proc.stdout:return None
+    while True:
+        line=proc.stdout.readline()
+        if line=="":return None
+        line=line.strip()
+        if "RAM " in line and "CPU" in line:return line
+
+def proc_stat():
+    out={}
+    for line in (read_text("/proc/stat") or "").splitlines():
+        p=line.split()
+        if not p or not p[0].startswith("cpu"):continue
+        if p[0]!="cpu" and not p[0][3:].isdigit():continue
+        try:out[p[0]]=[int(x) for x in p[1:]]
+        except ValueError:pass
+    return out
+
+def cpu_delta(a,b):
+    if not a or not b:return None,None
+    d=[max(0,b[i]-a[i]) for i in range(min(len(a),len(b)))]
+    total=sum(d)
+    if total<=0:return None,None
+    idle=d[3] if len(d)>3 else 0;iowait=d[4] if len(d)>4 else 0
+    return 100*(total-idle-iowait)/total,100*iowait/total
+
+def loadavg():
     try:
-        av = float(open(a, "r", encoding="ascii").read().strip())
-        if kind == "uw":
-            return av / 1000.0
-        bv = float(open(b, "r", encoding="ascii").read().strip())
-        return av * bv / 1000.0
-    except (OSError, ValueError, TypeError):
-        return None
+        p=read_text("/proc/loadavg").split()
+        return float(p[0]),float(p[1]),float(p[2])
+    except:return None,None,None
 
+def meminfo():
+    text=read_text("/proc/meminfo") or "";d={}
+    for line in text.splitlines():
+        m=re.match(r"([^:]+):\s+(\d+)",line)
+        if m:d[m.group(1)]=int(m.group(2))
+    return text,d
 
-def parse_duration(text):
-    if text is None:
-        return 0.0
-    s = str(text).strip().lower()
-    if s in ("", "0", "forever", "inf"):
-        return 0.0
-    m = re.fullmatch(r"([\d.]+)\s*([smh]?)", s)
-    if not m:
-        raise argparse.ArgumentTypeError("duration must look like 30, 30s, 20m, or 1.5h")
-    value = float(m.group(1))
-    return value * {"": 1.0, "s": 1.0, "m": 60.0, "h": 3600.0}[m.group(2)]
+def nvmap_mb(text):
+    m=re.search(r"^NvMapMemUsed:\s+(\d+)\s+kB",text,re.M)
+    return int(m.group(1))/1024 if m else None
 
+def default_disks():
+    return [os.path.basename(p) for p in sorted(glob.glob("/sys/block/*"))
+            if not os.path.basename(p).startswith(("loop","zram","ram","sr","fd"))]
 
-def fmt(v, digits=1):
-    if v is None or v == "":
-        return "-"
-    if isinstance(v, float):
-        return f"{v:.{digits}f}"
-    return str(v)
+def diskstats(devs):
+    want=set(devs);rd=wr=io=found=0
+    for line in (read_text("/proc/diskstats") or "").splitlines():
+        p=line.split()
+        if len(p)<14 or p[2] not in want:continue
+        try:rd+=int(p[5]);wr+=int(p[9]);io+=int(p[12]);found+=1
+        except ValueError:pass
+    return (rd,wr,io) if found else None
 
+def disk_delta(a,b,dt):
+    if a is None or b is None or dt<=0:return None,None,None
+    rd=max(0,b[0]-a[0])*512/1048576/dt
+    wr=max(0,b[1]-a[1])*512/1048576/dt
+    busy=min(100,max(0,b[2]-a[2])/(dt*1000)*100)
+    return rd,wr,busy
 
-def build_fieldnames(cpu_count, hwmon_power_keys, include_raw=False):
-    fields = [
-        "timestamp_iso", "elapsed_s", "sample",
-        "cpu_total_pct", "cpu_iowait_pct", "load1", "load5", "load15",
-        "processes_running", "processes_total",
-        "ram_used_mb", "ram_total_mb", "ram_used_pct", "mem_available_mb",
-        "swap_used_mb", "swap_total_mb", "lfb_blocks", "lfb_block_mb",
-    ]
-    for i in range(cpu_count):
-        fields += [f"cpu{i}_pct", f"cpu{i}_mhz", f"cpu{i}_state"]
-    fields += ["emc_pct", "emc_mhz", "gpu_pct", "gpu_mhz", "gr3d2_pct", "gr3d2_mhz"]
-    fields += [f"temp_{x}_c" for x in TEMP_NAMES]
-    for rail in TEGRA_POWER_RAILS:
-        fields += [f"power_{rail}_mw", f"power_{rail}_avg_mw"]
-    fields += [f"hwmon_power_{k}_mw" for k in hwmon_power_keys]
-    fields += [
-        "disk_read_mib_s", "disk_write_mib_s", "disk_busy_pct",
-        "net_rx_mib_s", "net_tx_mib_s",
-    ]
-    if include_raw:
-        fields.append("raw_tegrastats")
-    return fields
+def default_net():
+    out=[]
+    for line in (read_text("/proc/net/dev") or "").splitlines()[2:]:
+        if ":" not in line:continue
+        n=line.split(":",1)[0].strip()
+        if not n.startswith(VIRTUAL_NET):out.append(n)
+    return sorted(set(out))
 
+def netstats(devs):
+    want=set(devs);rx=tx=found=0
+    for line in (read_text("/proc/net/dev") or "").splitlines()[2:]:
+        if ":" not in line:continue
+        n,s=line.split(":",1)
+        if n.strip() not in want:continue
+        p=s.split()
+        if len(p)<16:continue
+        try:rx+=int(p[0]);tx+=int(p[8]);found+=1
+        except ValueError:pass
+    return (rx,tx) if found else None
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description="Low-overhead NVIDIA Jetson Orin NX resource monitor")
-    p.add_argument("-i", "--interval", type=float, default=1.0, help="sampling interval in seconds (default: 1.0)")
-    p.add_argument("-d", "--duration", type=parse_duration, default=0.0, help="duration: 30s, 20m, 1h; 0=until Ctrl+C")
-    p.add_argument("-o", "--output", default=None, help="CSV output path")
-    p.add_argument("--disk", default="auto", help="comma-separated block devices, or auto")
-    p.add_argument("--net", default="auto", help="comma-separated network interfaces, or auto")
-    p.add_argument("--print-every", type=int, default=5, help="print one console summary every N samples; 0 disables")
-    p.add_argument("--raw", action="store_true", help="also store the original tegrastats line")
-    args = p.parse_args(argv)
+def net_delta(a,b,dt):
+    if a is None or b is None or dt<=0:return None,None
+    return max(0,b[0]-a[0])/1048576/dt,max(0,b[1]-a[1])/1048576/dt
 
-    if args.interval < 0.2:
-        p.error("interval below 0.2s is intentionally rejected to keep monitor overhead low")
+def is_emc(path):
+    return "emc" in (path+" "+os.path.realpath(path)).lower() or "memory-controller" in (path+" "+os.path.realpath(path)).lower()
 
-    tegrastats = shutil.which("tegrastats")
-    if not tegrastats:
-        p.error("tegrastats not found in PATH")
+def discover_emc_freq():
+    for p in ("/sys/kernel/debug/bpmp/debug/clk/emc/rate",
+              "/sys/kernel/debug/bpmp/debug/clk/emc/clk_rate",
+              "/sys/kernel/debug/clk/emc/clk_rate"):
+        if os.path.isfile(p) and os.access(p,os.R_OK):return p
+    for p in sorted(glob.glob("/sys/class/devfreq/*/cur_freq")):
+        if is_emc(os.path.dirname(p)) and os.access(p,os.R_OK):return p
+    return None
 
-    output = args.output or f"orin_monitor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    devices = discover_block_devices() if args.disk == "auto" else [x for x in args.disk.split(",") if x]
-    interfaces = discover_network_interfaces() if args.net == "auto" else [x for x in args.net.split(",") if x]
-    devfreq = discover_devfreq_sources()
-    hwmon = discover_hwmon_power_sensors()
+def discover_emc_load():
+    for base in glob.glob("/sys/class/devfreq/*"):
+        if not is_emc(base):continue
+        for n in ("load","utilization","busy_percent","device_load"):
+            p=os.path.join(base,n)
+            if os.path.isfile(p) and os.access(p,os.R_OK):return p
+    return None
 
-    interval_ms = max(200, int(round(args.interval * 1000.0)))
-    cmd = [tegrastats, "--interval", str(interval_ms)]
+def discover_gpu_freq():
+    for p in ("/sys/kernel/debug/bpmp/debug/clk/gpu/rate","/sys/kernel/debug/clk/gpu/clk_rate"):
+        if os.path.isfile(p) and os.access(p,os.R_OK):return p
+    for p in sorted(glob.glob("/sys/class/devfreq/*/cur_freq")):
+        base=os.path.dirname(p);s=(base+" "+os.path.realpath(base)).lower()
+        if ("gpu" in s or "17000000" in s) and os.access(p,os.R_OK):return p
+    return None
 
-    print(f"output: {output}")
-    print(f"interval: {interval_ms / 1000.0:.3f}s   duration: {'until Ctrl+C' if args.duration <= 0 else str(args.duration) + 's'}")
-    print(f"disk devices: {','.join(devices) if devices else '-'}")
-    print(f"network interfaces: {','.join(interfaces) if interfaces else '-'}")
-    if hwmon:
-        print("hwmon power: " + ",".join(sorted(hwmon)))
-    else:
-        print("hwmon power: not discovered (tegrastats power fields will still be used if present)")
+def read_freq(path):return freq_mhz(read_float(path)) if path else None
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+def read_pct(path):
+    s=read_text(path) if path else None
+    if s is None:return None
+    m=re.search(r"([0-9]+(?:\.[0-9]+)?)",s)
+    if not m:return None
+    v=float(m.group(1))
+    return v if 0<=v<=100 else None
 
-    old_handlers = {}
-    stop = {"value": False}
+def rail_name(path,ch):
+    if "0040" not in path.lower():return None
+    return {1:"vdd_in",2:"vdd_cpu_gpu_cv",3:"vdd_soc"}.get(ch)
 
-    def request_stop(signum, frame):
-        stop["value"] = True
+def discover_power():
+    out={}
+    for hw in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+        real=os.path.realpath(hw);name=norm(read_text(os.path.join(hw,"name")) or "")
+        if "ina3221" not in name and "ina3221" not in real.lower():continue
+        for ch in range(1,5):
+            label=read_text(os.path.join(hw,f"power{ch}_label")) or read_text(os.path.join(hw,f"curr{ch}_label")) or read_text(os.path.join(hw,f"in{ch}_label"))
+            rail=norm(label) if label else rail_name(real,ch)
+            if not rail:continue
+            p=os.path.join(hw,f"power{ch}_input");v=os.path.join(hw,f"in{ch}_input");c=os.path.join(hw,f"curr{ch}_input")
+            if os.path.isfile(p) and os.access(p,os.R_OK):out[rail]=("power",p)
+            elif all(os.path.isfile(x) and os.access(x,os.R_OK) for x in (v,c)):out[rail]=("vi",v,c)
+    return out
 
-    for sig in (signal.SIGTERM, signal.SIGHUP):
-        old_handlers[sig] = signal.signal(sig, request_stop)
+def read_power(sensors):
+    out={}
+    for name,d in sensors.items():
+        if d[0]=="power":
+            v=read_float(d[1]);out[name]=v/1000 if v is not None else None
+        else:
+            v=read_float(d[1]);a=read_float(d[2]);out[name]=v*a/1000 if v is not None and a is not None else None
+    return out
 
-    start = time.monotonic()
-    prev_t = start
-    prev_cpu = read_proc_stat()
-    prev_disk = read_diskstats()
-    prev_net = read_netdev()
-    samples = 0
+def header(ncpu,power):
+    h=["timestamp","sample","elapsed_s","interval_s","cpu_total_pct","cpu_iowait_pct","load1","load5","load15"]
+    h += [f"cpu{i}_pct" for i in range(ncpu)]
+    h += [f"cpu{i}_mhz" for i in range(ncpu)]
+    h += ["gpu_pct","gpu_mhz","gr3d2_pct","gr3d2_mhz","emc_pct","emc_mhz","emc_sysfs_load_pct",
+          "ram_used_mb","ram_total_mb","ram_available_mb","ram_used_pct","swap_used_mb","swap_total_mb",
+          "swap_cached_mb","lfb_count","lfb_size_mb","lfb_total_mb","nvmap_used_mb",
+          "disk_read_mib_s","disk_write_mib_s","disk_busy_pct","net_rx_mib_s","net_tx_mib_s"]
+    h += [f"temp_{x}_c" for x in TEMPS]
+    h += [f"power_{x}_mw" for x in power]
+    return h
+
+def cell(v):
+    if v is None:return ""
+    return f"{v:.3f}" if isinstance(v,float) else v
+
+def split_arg(s):return [x.strip() for x in s.split(",") if x.strip()] if s else None
+
+def args():
+    p=argparse.ArgumentParser()
+    p.add_argument("-i","--interval",type=float,default=1.0)
+    p.add_argument("-d","--duration",type=parse_duration)
+    p.add_argument("-o","--output",default="orin_monitor.csv")
+    p.add_argument("--disk")
+    p.add_argument("--net")
+    p.add_argument("--quiet",action="store_true")
+    return p.parse_args()
+
+def main():
+    a=args()
+    if a.interval<0.02:
+        print("interval must be >= 0.02s",file=sys.stderr);return 2
+
+    tsp=find_ts()
+    if not tsp:
+        print("tegrastats not found",file=sys.stderr);return 2
+
+    disks=split_arg(a.disk) or default_disks()
+    nets=split_arg(a.net) or default_net()
+    sensors=discover_power();power_names=sorted(sensors)
+    emc_freq_path=discover_emc_freq()
+    emc_load_path=discover_emc_load()
+    gpu_freq_path=discover_gpu_freq()
+
+    os.makedirs(os.path.dirname(os.path.abspath(a.output)),exist_ok=True)
+    proc=start_ts(tsp,a.interval)
+    sample=0
 
     try:
-        pending_line = proc.stdout.readline() if proc.stdout else ""
-        if not pending_line:
-            raise RuntimeError(f"tegrastats produced no data (exit code {proc.poll()})")
+        first_line=next_ts(proc)
+        if not first_line:
+            print("no tegrastats output",file=sys.stderr);return 2
 
-        first_parsed = parse_tegrastats_line(pending_line)
-        cpu_count = infer_cpu_count(first_parsed, CPU_COUNT)
-        fieldnames = build_fieldnames(cpu_count, sorted(hwmon), args.raw)
-        print(f"CPU columns: {cpu_count} cores (detected from tegrastats)")
+        first=parse_ts(first_line)
+        ncpu=len(first["cpu"]) or os.cpu_count() or 8
+        cols=header(ncpu,power_names)
 
-        with open(output, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
+        print(f"Orin Monitor v{VERSION}")
+        print(f"output: {a.output}")
+        print(f"interval: {a.interval:.3f}s  duration: {'Ctrl+C' if a.duration is None else f'{a.duration:.1f}s'}")
+        print(f"disk: {','.join(disks) or '-'}")
+        print(f"net: {','.join(nets) or '-'}")
+        print(f"power: {','.join(power_names) or '-'}")
+        print(f"EMC freq: {emc_freq_path or '-'}")
+        print(f"EMC load: {emc_load_path or '-'}")
+        print(f"GPU freq fallback: {gpu_freq_path or '-'}")
+        print(f"CPU cores: {ncpu}")
 
-            while not stop["value"]:
-                if pending_line is not None:
-                    line = pending_line
-                    pending_line = None
-                else:
-                    line = proc.stdout.readline() if proc.stdout else ""
+        prev_cpu=proc_stat();prev_disk=diskstats(disks);prev_net=netstats(nets)
+        start=time.monotonic();last=start-a.interval;pending=first_line
+        every=max(1,round(1/a.interval))
 
-                if not line:
-                    if proc.poll() is not None:
-                        raise RuntimeError(f"tegrastats exited unexpectedly with code {proc.returncode}")
-                    time.sleep(0.02)
-                    continue
+        with open(a.output,"w",newline="",encoding="utf-8") as f:
+            w=csv.DictWriter(f,fieldnames=cols);w.writeheader()
 
-                now_mono = time.monotonic()
-                elapsed_delta = now_mono - prev_t
-                row = parse_tegrastats_line(line)
-                row["timestamp_iso"] = datetime.now().astimezone().isoformat(timespec="milliseconds")
-                row["elapsed_s"] = round(now_mono - start, 3)
-                row["sample"] = samples + 1
+            while a.duration is None or time.monotonic()-start<a.duration:
+                line=pending if pending is not None else next_ts(proc);pending=None
+                if not line:break
 
-                curr_cpu = read_proc_stat()
-                curr_disk = read_diskstats()
-                curr_net = read_netdev()
-                cpu_pct, iowait_pct = cpu_usage_delta(prev_cpu, curr_cpu)
-                dr, dw, db = disk_rates(prev_disk, curr_disk, elapsed_delta, devices)
-                nr, nt = net_rates(prev_net, curr_net, elapsed_delta, interfaces)
-                row.update({
-                    "cpu_total_pct": cpu_pct,
-                    "cpu_iowait_pct": iowait_pct,
-                    "disk_read_mib_s": dr,
-                    "disk_write_mib_s": dw,
-                    "disk_busy_pct": db,
-                    "net_rx_mib_s": nr,
-                    "net_tx_mib_s": nt,
-                })
+                now=time.monotonic();dt=max(now-last,1e-9);elapsed=now-start;last=now;sample+=1
+                t=parse_ts(line)
 
-                load1, load5, load15, prun, ptotal = read_loadavg()
-                row.update({
-                    "load1": load1, "load5": load5, "load15": load15,
-                    "processes_running": prun, "processes_total": ptotal,
-                })
+                cur_cpu=proc_stat();cpu_pct,iowait=cpu_delta(prev_cpu.get("cpu"),cur_cpu.get("cpu"));prev_cpu=cur_cpu
+                cur_disk=diskstats(disks);rd,wr,busy=disk_delta(prev_disk,cur_disk,dt);prev_disk=cur_disk
+                cur_net=netstats(nets);rx,tx=net_delta(prev_net,cur_net,dt);prev_net=cur_net
+                l1,l5,l15=loadavg()
+                mem_text,mem=meminfo()
+                pwr=read_power(sensors)
 
-                mem = read_meminfo()
-                if "MemAvailable" in mem:
-                    row["mem_available_mb"] = mem["MemAvailable"]
-                if "ram_total_mb" not in row and "MemTotal" in mem:
-                    row["ram_total_mb"] = mem["MemTotal"]
-                if "ram_used_mb" not in row and "MemTotal" in mem and "MemAvailable" in mem:
-                    row["ram_used_mb"] = mem["MemTotal"] - mem["MemAvailable"]
-                if row.get("ram_total_mb"):
-                    row["ram_used_pct"] = 100.0 * row.get("ram_used_mb", 0.0) / row["ram_total_mb"]
-                if "swap_total_mb" not in row and "SwapTotal" in mem:
-                    row["swap_total_mb"] = mem["SwapTotal"]
-                if "swap_used_mb" not in row and "SwapTotal" in mem and "SwapFree" in mem:
-                    row["swap_used_mb"] = mem["SwapTotal"] - mem["SwapFree"]
+                gpu_mhz=t["gpu_mhz"] if t["gpu_mhz"] is not None else read_freq(gpu_freq_path)
+                emc_mhz=t["emc_mhz"] if t["emc_mhz"] is not None else read_freq(emc_freq_path)
 
-                if row.get("gpu_mhz") is None and "gpu" in devfreq:
-                    row["gpu_mhz"] = read_devfreq_mhz(devfreq["gpu"])
-                if row.get("emc_mhz") is None and "emc" in devfreq:
-                    row["emc_mhz"] = read_devfreq_mhz(devfreq["emc"])
+                row={
+                    "timestamp":datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                    "sample":sample,"elapsed_s":elapsed,"interval_s":dt,
+                    "cpu_total_pct":cpu_pct,"cpu_iowait_pct":iowait,"load1":l1,"load5":l5,"load15":l15,
+                    "gpu_pct":t["gpu_pct"],"gpu_mhz":gpu_mhz,
+                    "gr3d2_pct":t["gr3d2_pct"],"gr3d2_mhz":t["gr3d2_mhz"],
+                    "emc_pct":t["emc_pct"],"emc_mhz":emc_mhz,"emc_sysfs_load_pct":read_pct(emc_load_path),
+                    "ram_used_mb":t["ram_used_mb"],"ram_total_mb":t["ram_total_mb"],
+                    "ram_available_mb":mem.get("MemAvailable",0)/1024 if "MemAvailable" in mem else None,
+                    "ram_used_pct":100*t["ram_used_mb"]/t["ram_total_mb"] if t["ram_used_mb"] is not None and t["ram_total_mb"] else None,
+                    "swap_used_mb":t["swap_used_mb"],"swap_total_mb":t["swap_total_mb"],"swap_cached_mb":t["swap_cached_mb"],
+                    "lfb_count":t["lfb_count"],"lfb_size_mb":t["lfb_size_mb"],
+                    "lfb_total_mb":t["lfb_count"]*t["lfb_size_mb"] if t["lfb_count"] is not None and t["lfb_size_mb"] is not None else None,
+                    "nvmap_used_mb":nvmap_mb(mem_text),
+                    "disk_read_mib_s":rd,"disk_write_mib_s":wr,"disk_busy_pct":busy,
+                    "net_rx_mib_s":rx,"net_tx_mib_s":tx,
+                }
 
-                for key, sensor in hwmon.items():
-                    row[f"hwmon_power_{key}_mw"] = read_hwmon_power_mw(sensor)
+                for i in range(ncpu):
+                    c=t["cpu"][i] if i<len(t["cpu"]) else None
+                    row[f"cpu{i}_pct"]=c["pct"] if c else None
+                    row[f"cpu{i}_mhz"]=c["mhz"] if c else None
 
-                if args.raw:
-                    row["raw_tegrastats"] = line.rstrip("\n")
+                for x in TEMPS:row[f"temp_{x}_c"]=t.get(f"temp_{x}_c")
+                for x in power_names:row[f"power_{x}_mw"]=pwr.get(x)
 
-                writer.writerow(row)
-                samples += 1
-                if samples % 10 == 0:
-                    f.flush()
+                w.writerow({k:cell(row.get(k)) for k in cols})
 
-                if args.print_every > 0 and (samples == 1 or samples % args.print_every == 0):
+                if sample%every==0:f.flush()
+
+                if not a.quiet and (sample==1 or sample%every==0):
+                    s=lambda v,fmt:"-" if v is None else format(v,fmt)
                     print(
-                        f"[{samples:6d}] CPU {fmt(cpu_pct)}%  "
-                        f"GPU {fmt(row.get('gpu_pct'))}%@{fmt(row.get('gpu_mhz'), 0)}MHz  "
-                        f"EMC {fmt(row.get('emc_pct'))}%@{fmt(row.get('emc_mhz'), 0)}MHz  "
-                        f"RAM {fmt(row.get('ram_used_mb'), 0)}/{fmt(row.get('ram_total_mb'), 0)}MB  "
-                        f"Tcpu {fmt(row.get('temp_cpu_c'))}C  "
-                        f"disk R/W {fmt(dr, 2)}/{fmt(dw, 2)} MiB/s  "
-                        f"net R/T {fmt(nr, 2)}/{fmt(nt, 2)} MiB/s"
+                        f"[{sample:6d}] "
+                        f"CPU {s(cpu_pct,'.1f')}%  "
+                        f"GPU {s(t['gpu_pct'],'.1f')}%@{s(gpu_mhz,'.0f')}MHz  "
+                        f"EMC {s(t['emc_pct'],'.1f')}%@{s(emc_mhz,'.0f')}MHz  "
+                        f"RAM {t['ram_used_mb']}/{t['ram_total_mb']}MB  "
+                        f"Tcpu {s(t.get('temp_cpu_c'),'.1f')}C  "
+                        f"disk {s(rd,'.2f')}/{s(wr,'.2f')} MiB/s  "
+                        f"net {s(rx,'.2f')}/{s(tx,'.2f')} MiB/s"
                     )
 
-                prev_t = now_mono
-                prev_cpu, prev_disk, prev_net = curr_cpu, curr_disk, curr_net
-
-                if args.duration > 0 and now_mono - start >= args.duration:
-                    break
+            f.flush()
 
     except KeyboardInterrupt:
         pass
     finally:
-        stop["value"] = True
         if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=1.0)
-        for sig, old in old_handlers.items():
-            signal.signal(sig, old)
+            try:proc.terminate();proc.wait(timeout=1)
+            except:
+                try:proc.kill()
+                except:pass
 
-    print(f"stopped: {samples} samples written to {output}")
+    print(f"stopped: {sample} samples written to {a.output}")
     return 0
 
-
-if __name__ == "__main__":
+if __name__=="__main__":
     sys.exit(main())
