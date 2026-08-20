@@ -37,7 +37,7 @@ def main(base,bt,d):
             i=bisect.bisect_left(ts,t)
             n=ts[0] if i==0 else ts[-1] if i==len(ts) else min(ts[i-1:i+1],key=lambda x:abs(x-t))
             r.append((n-t)*1000)
-        print(f"{k}: median={statistics.median(r):+.3f} ms mean={statistics.mean(r):+.3f} ms")
+        print(f"{k}: abs_median={statistics.median(abs(offset) for offset in r):.3f} ms signed_mean={statistics.mean(r):+.3f} ms")
 
 if __name__=="__main__":
     p=argparse.ArgumentParser()
