@@ -475,15 +475,17 @@ pipelines:
         config:
           gate_id: saved_sample_fps
           max_fps: 1.0
-      - node_id: front_ext_camera_yolo_gate
+      - node_id: front_camera_yolo_gate
         type: yolo_gate
         inputs:
-          image: main_frame
+          image: front_camera
         config:
           model_path: demo/models/yolo26m.pt
           class_names:
             - person
             - car
+            - bus
+            - truck
           confidence_thresholds:
             - 0.00025
             - 0.00025
@@ -695,15 +697,15 @@ pipelines:
         type: end
     edges:
       - [start, fps_guard]
-      - [fps_guard, front_ext_camera_yolo_gate]
-      - [front_ext_camera_yolo_gate, sync_top_lidar]
-      - [front_ext_camera_yolo_gate, sync_corner_lidars]
-      - [front_ext_camera_yolo_gate, sync_images]
-      - [front_ext_camera_yolo_gate, undistort_front_ext]
-      - [sync_images, undistort_front]
-      - [sync_images, undistort_rear]
-      - [sync_images, undistort_left]
-      - [sync_images, undistort_right]
+      - [fps_guard, sync_images]
+      - [sync_images, front_camera_yolo_gate]
+      - [front_camera_yolo_gate, sync_top_lidar]
+      - [front_camera_yolo_gate, sync_corner_lidars]
+      - [front_camera_yolo_gate, undistort_front_ext]
+      - [front_camera_yolo_gate, undistort_front]
+      - [front_camera_yolo_gate, undistort_rear]
+      - [front_camera_yolo_gate, undistort_left]
+      - [front_camera_yolo_gate, undistort_right]
       - [sync_top_lidar, top_lidar_motion]
       - [sync_corner_lidars, front_left_motion]
       - [sync_corner_lidars, front_right_motion]
