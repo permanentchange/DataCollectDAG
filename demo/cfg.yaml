@@ -139,7 +139,7 @@ pipelines:
         config:
           source: top_lidar
           strategy: nearest
-          max_time_diff_ms: 20
+          max_time_diff_ms: 50
           wait_timeout_ms: 400
           required: true
       - node_id: sync_corner_lidars
@@ -227,7 +227,7 @@ pipelines:
         config:
           source: top_lidar
           strategy: nearest
-          max_time_diff_ms: 20
+          max_time_diff_ms: 50
           wait_timeout_ms: 400
           required: true
       - node_id: sync_corner_lidars
@@ -530,7 +530,7 @@ pipelines:
         config:
           source: top_lidar
           strategy: nearest
-          max_time_diff_ms: 20
+          max_time_diff_ms: 50
           wait_timeout_ms: 400
           required: true
       - node_id: sync_corner_lidars
