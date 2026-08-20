@@ -139,7 +139,7 @@ pipelines:
         config:
           source: top_lidar
           strategy: nearest
-          max_time_diff_ms: 50
+          max_time_diff_ms: 20
           wait_timeout_ms: 400
           required: true
       - node_id: sync_corner_lidars
@@ -158,7 +158,7 @@ pipelines:
             - rear_left_lidar
             - rear_right_lidar
           strategy: nearest
-          max_time_diff_ms: 50
+          max_time_diff_ms: 20
           wait_timeout_ms: 400
           required: true
       - node_id: sync_images
@@ -177,8 +177,8 @@ pipelines:
             - left_camera
             - right_camera
           strategy: nearest
-          max_time_diff_ms: 10
-          wait_timeout_ms: 150
+          max_time_diff_ms: 20
+          wait_timeout_ms: 400
           required: true
       - node_id: end
         type: end
@@ -227,7 +227,7 @@ pipelines:
         config:
           source: top_lidar
           strategy: nearest
-          max_time_diff_ms: 50
+          max_time_diff_ms: 20
           wait_timeout_ms: 400
           required: true
       - node_id: sync_corner_lidars
@@ -246,7 +246,7 @@ pipelines:
             - rear_left_lidar
             - rear_right_lidar
           strategy: nearest
-          max_time_diff_ms: 50
+          max_time_diff_ms: 20
           wait_timeout_ms: 400
           required: true
       - node_id: sync_images
@@ -530,7 +530,7 @@ pipelines:
         config:
           source: top_lidar
           strategy: nearest
-          max_time_diff_ms: 50
+          max_time_diff_ms: 20
           wait_timeout_ms: 400
           required: true
       - node_id: sync_corner_lidars
@@ -549,7 +549,7 @@ pipelines:
             - rear_left_lidar
             - rear_right_lidar
           strategy: nearest
-          max_time_diff_ms: 50
+          max_time_diff_ms: 20
           wait_timeout_ms: 400
           required: true
       - node_id: sync_images
