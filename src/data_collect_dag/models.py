@@ -77,6 +77,7 @@ class PointCloudFrame:
     points_xyz: Optional[np.ndarray]
     point_timestamps_ns: Optional[np.ndarray] = None
     intensities: Optional[np.ndarray] = None
+    has_intensity: Optional[np.ndarray] = None
     ring: Optional[np.ndarray] = None
     frame_name: str = ""
     raw_msg_ref: Any = None
@@ -86,13 +87,16 @@ class PointCloudFrame:
         *,
         points_xyz: Optional[np.ndarray] = None,
         point_timestamps_ns: Optional[np.ndarray] = None,
+        intensities: Optional[np.ndarray] = None,
+        has_intensity: Optional[np.ndarray] = None,
         frame_name: Optional[str] = None,
     ) -> "PointCloudFrame":
         return PointCloudFrame(
             meta=self.meta,
             points_xyz=self.points_xyz if points_xyz is None else points_xyz,
             point_timestamps_ns=self.point_timestamps_ns if point_timestamps_ns is None else point_timestamps_ns,
-            intensities=self.intensities,
+            intensities=self.intensities if intensities is None else intensities,
+            has_intensity=self.has_intensity if has_intensity is None else has_intensity,
             ring=self.ring,
             frame_name=self.frame_name if frame_name is None else frame_name,
             raw_msg_ref=self.raw_msg_ref,

@@ -282,7 +282,7 @@ def _parse_ros_image_message(msg: Any) -> np.ndarray:
     raise ValueError(f"unsupported image encoding: {msg.encoding}")
 
 
-def _parse_pointcloud_message(msg: Any) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+def _parse_pointcloud_message(msg: Any) -> Tuple[np.ndarray, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
     dtype = _build_structured_dtype(msg.fields, int(msg.point_step))
     count = int(msg.width) * int(msg.height)
     cloud = np.ndarray(shape=(count,), dtype=dtype, buffer=memoryview(msg.data))
@@ -307,7 +307,12 @@ def _parse_pointcloud_message(msg: Any) -> Tuple[np.ndarray, Optional[np.ndarray
             elif 1e8 <= median <= 1e11:
                 converted[finite] = np.rint(raw_ts[finite] * 1_000_000_000.0).astype(np.int64)
                 timestamp_ns = converted
-    return points_xyz, timestamp_ns
+    intensities = None
+    has_intensity = None
+    if "intensity" in (cloud.dtype.names or ()):
+        intensities = np.asarray(cloud["intensity"], dtype=np.float64).reshape(-1)
+        has_intensity = np.ones(intensities.shape[0], dtype=bool)
+    return points_xyz, timestamp_ns, intensities, has_intensity
 
 
 def ensure_image_frame_decoded(frame: ImageFrame) -> ImageFrame:
@@ -323,8 +328,13 @@ def ensure_pointcloud_frame_parsed(frame: PointCloudFrame) -> PointCloudFrame:
         return frame
     if frame.raw_msg_ref is None:
         raise ValueError("pointcloud frame missing raw ROS message")
-    points_xyz, point_timestamps_ns = _parse_pointcloud_message(frame.raw_msg_ref)
-    return frame.replace(points_xyz=points_xyz, point_timestamps_ns=point_timestamps_ns)
+    points_xyz, point_timestamps_ns, intensities, has_intensity = _parse_pointcloud_message(frame.raw_msg_ref)
+    return frame.replace(
+        points_xyz=points_xyz,
+        point_timestamps_ns=point_timestamps_ns,
+        intensities=intensities,
+        has_intensity=has_intensity,
+    )
 
 
 def _build_structured_dtype(fields: Iterable[Any], point_step: int) -> np.dtype:

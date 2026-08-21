@@ -214,6 +214,8 @@ class PointCloudRadiusCropNode(BaseNode):
         cropped = cloud.replace(
             points_xyz=cloud.points_xyz[mask],
             point_timestamps_ns=cloud.point_timestamps_ns[mask] if cloud.point_timestamps_ns is not None else None,
+            intensities=cloud.intensities[mask] if cloud.intensities is not None else None,
+            has_intensity=cloud.has_intensity[mask] if cloud.has_intensity is not None else None,
         )
         sample.metadata.setdefault("pointcloud_processing", {})[self.outputs["pointcloud"]] = {
             "stage": "sensor_radius_crop",
@@ -424,6 +426,8 @@ class PointCloudRoiCropNode(BaseNode):
         cropped = cloud.replace(
             points_xyz=points[mask],
             point_timestamps_ns=cloud.point_timestamps_ns[mask] if cloud.point_timestamps_ns is not None else None,
+            intensities=cloud.intensities[mask] if cloud.intensities is not None else None,
+            has_intensity=cloud.has_intensity[mask] if cloud.has_intensity is not None else None,
         )
         sample.metadata.setdefault("pointcloud_processing", {})[self.outputs["pointcloud"]] = {
             "stage": "base_roi_crop",
@@ -446,6 +450,8 @@ class AggregatePointCloudNode(BaseNode):
         required_keys = list(self.config.get("required_inputs") or [])
         optional_keys = list(self.config.get("optional_inputs") or [])
         points_list = []
+        intensity_list = []
+        has_intensity_list = []
         ref_cloud: Optional[PointCloudFrame] = None
         for key in required_keys:
             if not sample.has(key):
@@ -453,15 +459,24 @@ class AggregatePointCloudNode(BaseNode):
             cloud: PointCloudFrame = ensure_pointcloud_frame_parsed(sample.get(key))
             ref_cloud = cloud if ref_cloud is None else ref_cloud
             points_list.append(cloud.points_xyz)
+            intensity_list.append(_point_intensities_or_zero(cloud))
+            has_intensity_list.append(_point_has_intensity_or_false(cloud))
         for key in optional_keys:
             if sample.has(key):
                 cloud = ensure_pointcloud_frame_parsed(sample.get(key))
                 ref_cloud = cloud if ref_cloud is None else ref_cloud
                 points_list.append(cloud.points_xyz)
+                intensity_list.append(_point_intensities_or_zero(cloud))
+                has_intensity_list.append(_point_has_intensity_or_false(cloud))
         points = np.vstack([item for item in points_list if item is not None and item.size > 0]) if any(item is not None and item.size > 0 for item in points_list) else np.empty((0, 3), dtype=np.float64)
         if ref_cloud is None or points.shape[0] == 0:
             return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_empty")
-        aggregated_cloud = ref_cloud.replace(points_xyz=points, frame_name="base")
+        aggregated_cloud = ref_cloud.replace(
+            points_xyz=points,
+            intensities=np.concatenate(intensity_list),
+            has_intensity=np.concatenate(has_intensity_list),
+            frame_name="base",
+        )
         sample.metadata["aggregated_pointcloud"] = {
             "required_inputs": required_keys,
             "optional_inputs_used": [key for key in optional_keys if sample.has(key)],
@@ -477,6 +492,28 @@ class AggregatePointCloudNode(BaseNode):
             sample.metadata["aggregated_pointcloud"]["optional_inputs_used"],
         )
         return self.ok()
+
+
+def _point_intensities_or_zero(cloud: PointCloudFrame) -> np.ndarray:
+    assert cloud.points_xyz is not None
+    if cloud.intensities is None:
+        return np.zeros(cloud.points_xyz.shape[0], dtype=np.float64)
+    values = np.asarray(cloud.intensities, dtype=np.float64).reshape(-1)
+    if values.shape[0] != cloud.points_xyz.shape[0]:
+        raise ValueError("pointcloud intensities must align with points_xyz")
+    return values
+
+
+def _point_has_intensity_or_false(cloud: PointCloudFrame) -> np.ndarray:
+    assert cloud.points_xyz is not None
+    if cloud.intensities is None:
+        return np.zeros(cloud.points_xyz.shape[0], dtype=bool)
+    if cloud.has_intensity is None:
+        return np.ones(cloud.points_xyz.shape[0], dtype=bool)
+    values = np.asarray(cloud.has_intensity, dtype=bool).reshape(-1)
+    if values.shape[0] != cloud.points_xyz.shape[0]:
+        raise ValueError("pointcloud has_intensity must align with points_xyz")
+    return values
 
 
 def _interpolate_trajectory(

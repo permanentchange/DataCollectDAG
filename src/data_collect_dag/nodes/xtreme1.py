@@ -73,7 +73,16 @@ class Xtreme1SaveNode(BaseNode):
             camera_configs.append(_build_camera_config(camera_params, image))
         pcd_path = self._save_root / "lidar_point_cloud_0" / f"{stem}.pcd"
         assert pointcloud.points_xyz is not None
-        save_ascii_pcd(pcd_path, pointcloud.points_xyz)
+        try:
+            save_ascii_pcd(
+                pcd_path,
+                pointcloud.points_xyz,
+                intensities=pointcloud.intensities,
+                has_intensity=pointcloud.has_intensity,
+            )
+        except ValueError as exc:
+            self.logger.debug("save fail sample_id=%s node_id=%s invalid_intensity=%s", sample.sample_id, self.node_id, exc)
+            return NodeOutcome(status=NodeResult.FAIL_SAMPLE, reason=f"{self.node_id}_invalid_intensity")
         config_path = self._save_root / "camera_config" / f"{stem}.json"
         write_json(config_path, {"items": camera_configs})
         sample.metadata["save_result"] = {

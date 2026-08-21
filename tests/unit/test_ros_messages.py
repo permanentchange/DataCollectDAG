@@ -59,6 +59,30 @@ def test_frame_from_ros_pointcloud_message():
     np.testing.assert_allclose(parsed.points_xyz[0], np.array([1.0, 2.0, 3.0], dtype=np.float64))
 
 
+def test_frame_from_ros_pointcloud_message_preserves_intensity_and_availability():
+    fields = [
+        SimpleNamespace(name="x", offset=0, datatype=7, count=1),
+        SimpleNamespace(name="y", offset=4, datatype=7, count=1),
+        SimpleNamespace(name="z", offset=8, datatype=7, count=1),
+        SimpleNamespace(name="intensity", offset=12, datatype=7, count=1),
+    ]
+    row = np.array([(1.0, 2.0, 3.0, 0.0), (4.0, 5.0, 6.0, 255.0)], dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("intensity", "<f4")])
+    msg = SimpleNamespace(
+        header=SimpleNamespace(stamp=Stamp(1000), frame_id="lidar"),
+        fields=fields,
+        point_step=16,
+        width=2,
+        height=1,
+        data=row.tobytes(),
+    )
+
+    frame = frame_from_ros_message("top_lidar", "/lidar", "pointcloud", "top_lidar", msg)
+    parsed = ensure_pointcloud_frame_parsed(frame)
+
+    np.testing.assert_array_equal(parsed.intensities, np.array([0.0, 255.0]))
+    np.testing.assert_array_equal(parsed.has_intensity, np.array([True, True]))
+
+
 def test_frame_from_ros_localization_message():
     msg = SimpleNamespace(
         timestamp=1782380245486758,

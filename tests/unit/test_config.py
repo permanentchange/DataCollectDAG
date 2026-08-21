@@ -146,7 +146,7 @@ def test_all_demo_xtreme1_nodes_use_generic_camera_bindings():
 
 
 def test_load_sa4_fps_uses_ordered_generic_camera_bindings():
-    config = load_app_config(Path("demo/cfg_sa4.yaml"))
+    config = load_app_config(Path("demo/cfg.yaml"))
     pipeline = config.pipelines["fps"]
     save_node = pipeline.nodes_by_id["save_xtreme1"]
 

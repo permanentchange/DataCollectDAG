@@ -21,23 +21,51 @@ def save_jpg(path: Path, image_bgr: np.ndarray, quality: int = 95) -> None:
     Image.fromarray(rgb).save(str(path), format="JPEG", quality=int(quality))
 
 
-def save_ascii_pcd(path: Path, points_xyz: np.ndarray) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def save_ascii_pcd(
+    path: Path,
+    points_xyz: np.ndarray,
+    intensities: np.ndarray = None,
+    has_intensity: np.ndarray = None,
+) -> None:
     points = np.asarray(points_xyz, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("points_xyz must have shape (N, 3)")
+    if intensities is None:
+        intensity_values = np.zeros(points.shape[0], dtype=np.float64)
+        availability = np.zeros(points.shape[0], dtype=bool)
+    else:
+        intensity_values = np.asarray(intensities, dtype=np.float64).reshape(-1)
+        if intensity_values.shape[0] != points.shape[0]:
+            raise ValueError("intensities must align with points_xyz")
+        if has_intensity is None:
+            availability = np.ones(points.shape[0], dtype=bool)
+        else:
+            availability = np.asarray(has_intensity, dtype=bool).reshape(-1)
+            if availability.shape[0] != points.shape[0]:
+                raise ValueError("has_intensity must align with points_xyz")
+    valid_values = intensity_values[availability]
+    if (
+        not np.isfinite(valid_values).all()
+        or np.any(valid_values < 0)
+        or np.any(valid_values > 255)
+        or np.any(valid_values != np.rint(valid_values))
+    ):
+        raise ValueError("invalid intensity: available values must be integer uint8 values")
+    output_intensities = np.where(availability, intensity_values, 0).astype(np.uint8)
+    path.parent.mkdir(parents=True, exist_ok=True)
     lines: List[str] = [
         "# .PCD v0.7 - Point Cloud Data file format",
         "VERSION 0.7",
-        "FIELDS x y z",
-        "SIZE 4 4 4",
-        "TYPE F F F",
-        "COUNT 1 1 1",
+        "FIELDS x y z intensity has_intensity",
+        "SIZE 4 4 4 1 1",
+        "TYPE F F F U U",
+        "COUNT 1 1 1 1 1",
         f"WIDTH {points.shape[0]}",
         "HEIGHT 1",
         "VIEWPOINT 0 0 0 1 0 0 0",
         f"POINTS {points.shape[0]}",
         "DATA ascii",
     ]
-    for point in points:
-        lines.append(f"{point[0]:.6f} {point[1]:.6f} {point[2]:.6f}")
+    for point, intensity, available in zip(points, output_intensities, availability):
+        lines.append(f"{point[0]:.6f} {point[1]:.6f} {point[2]:.6f} {int(intensity)} {int(available)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-

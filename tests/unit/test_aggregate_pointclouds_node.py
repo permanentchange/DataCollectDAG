@@ -20,3 +20,26 @@ def test_aggregate_pointclouds_node(dummy_session):
     assert result.status.value == "OK"
     assert sample.get("aggregated_pointcloud", producer="agg").points_xyz.shape[0] == 2
 
+
+def test_aggregate_pointclouds_marks_points_without_source_intensity(dummy_session):
+    sample = SampleContext(sample_id="s")
+    cloud_a = PointCloudFrame(
+        make_meta("top_lidar", "pointcloud", 1000),
+        np.array([[1.0, 0.0, 0.0]]),
+        intensities=np.array([17.0]),
+        has_intensity=np.array([True]),
+    )
+    cloud_b = PointCloudFrame(make_meta("front_left_lidar", "pointcloud", 1000), np.array([[2.0, 0.0, 0.0]]))
+    sample.put("top_lidar_ready", cloud_a, "a")
+    sample.put("front_left_ready", cloud_b, "b")
+    node = AggregatePointCloudNode(
+        NodeConfig("agg", "aggregate_pointclouds", {}, {"pointcloud": "aggregated_pointcloud"}, {"required_inputs": ["top_lidar_ready"], "optional_inputs": ["front_left_ready"]}),
+        dummy_session,
+    )
+
+    result = node.run(sample)
+    cloud = sample.get("aggregated_pointcloud", producer="agg")
+
+    assert result.status.value == "OK"
+    np.testing.assert_array_equal(cloud.intensities, np.array([17.0, 0.0]))
+    np.testing.assert_array_equal(cloud.has_intensity, np.array([True, False]))
