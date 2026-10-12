@@ -81,7 +81,12 @@ Available sample pipelines:
 | `demo/xtreme1_demo.yaml` | `lidar_camera_1fps`, `lidar_frontcamera_1fps` | No |
 | `demo/xtreme1_demo.yaml` | `init`, `person_1fps` | YOLO |
 
-Both demo YAML files reference `demo/calibration/cali.json`. YOLO pipelines reference `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself. Some sample configurations explicitly request CUDA, so a CPU-only environment must use a non-inference pipeline or change the YOLO node's `device` setting.
+Both demo YAML files reference `demo/calibration/cali.json`. YOLO pipelines reference `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself:
+
+```bash
+mkdir -p demo/models
+# Place your compatible checkpoint at demo/models/yolo26m.pt
+``` Some sample configurations explicitly request CUDA, so a CPU-only environment must use a non-inference pipeline or change the YOLO node's `device` setting.
 
 Relative values in `output.root_dir`, `calibration.path` and YOLO `model_path` are resolved against the **current working directory**, not the YAML's directory. Use absolute paths when launching from elsewhere. The convenience script `bash run.sh /absolute/path/config.yaml [pipeline_name]` changes its working directory to the repository root.
 
