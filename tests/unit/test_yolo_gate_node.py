@@ -278,3 +278,76 @@ def test_yolo_gate_setup_fails_when_model_path_missing(tmp_path, dummy_session):
     )
     with pytest.raises(ValueError, match="missing yolo model_path"):
         node.setup()
+
+
+def test_yolo_gate_auto_chooses_cpu_without_cuda(tmp_path, dummy_session, monkeypatch):
+    monkeypatch.setattr(
+        "data_collect_dag.nodes.vision._load_torch_module",
+        lambda: _FakeTorch(cuda_available=False),
+    )
+    node = _make_node(tmp_path, dummy_session, monkeypatch, device="auto")
+    assert node._auto_device is True
+    assert node._device == "cpu"
+
+
+def test_yolo_gate_auto_retries_cpu_after_cuda_predict_failure(
+    tmp_path, dummy_session, image_frame, monkeypatch
+):
+    monkeypatch.setattr(
+        "data_collect_dag.nodes.vision._load_torch_module",
+        lambda: _FakeTorch(cuda_available=True),
+    )
+    node = _make_node(tmp_path, dummy_session, monkeypatch, device="auto")
+    assert node._device == "0"
+
+    class _FailsOnCuda:
+        calls = []
+        names = {0: "person"}
+
+        def predict(self, **kwargs):
+            self.calls.append(kwargs.get("device"))
+            if kwargs.get("device") == "0":
+                raise RuntimeError("CUDA device failure")
+            return []
+
+    model = _FailsOnCuda()
+    node._model = model
+    outcome = node.run(_make_sample(image_frame))
+    assert model.calls == ["0", "cpu"]
+    assert node._device == "cpu"
+    assert outcome.reason == "front_yolo_gate_target_not_detected"
+
+
+def test_yolo_gate_explicit_cuda_does_not_retry_cpu_after_predict_failure(
+    tmp_path, dummy_session, image_frame, monkeypatch
+):
+    monkeypatch.setattr(
+        "data_collect_dag.nodes.vision._load_torch_module",
+        lambda: _FakeTorch(cuda_available=True),
+    )
+    node = _make_node(tmp_path, dummy_session, monkeypatch, device="cuda:0")
+
+    class _AlwaysFails:
+        calls = []
+
+        def predict(self, **kwargs):
+            self.calls.append(kwargs.get("device"))
+            raise RuntimeError("CUDA device failure")
+
+    model = _AlwaysFails()
+    node._model = model
+    outcome = node.run(_make_sample(image_frame))
+    assert model.calls == ["cuda:0"]
+    assert outcome.reason == "front_yolo_gate_inference_failed"
+
+
+def test_yolo_engine_auto_skips_torch_probe(tmp_path, dummy_session, monkeypatch):
+    monkeypatch.setattr(
+        "data_collect_dag.nodes.vision._load_torch_module",
+        lambda: (_ for _ in ()).throw(AssertionError("Torch should stay unused")),
+    )
+    node = _make_node(
+        tmp_path, dummy_session, monkeypatch, model_name="model.engine", device="auto"
+    )
+    assert node._auto_device is False
+    assert node._device is None
