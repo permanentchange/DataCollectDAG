@@ -43,91 +43,117 @@ Make sure those message packages are available in your ROS/Python environment be
 
 ## Installation
 
-Choose one of the following environment setups.
+The **base installation does not install** `ultralytics`, `torch`,
+`torchvision`, `onnx`, or `onnxruntime`. Pip installs only the core
+dependencies used by regular DAG pipelines, such as `fps` in
+`demo/cfg.yaml`. ROS1 Noetic and message packages must be provided
+by the host environment.
 
-### Option 1: Install With `conda`
-
-Create and activate the environment:
-
-```bash
-conda create -n dcd python=3.8 -y
-conda activate dcd
-```
-
-Install the project:
+Use Python 3.8. For example, using `venv`:
 
 ```bash
-python -m pip install -e '.[yolo]'
-```
-
-### Option 2: Install With `python -m venv`
-
-Make sure `python3.8` is available on your machine, then create and activate a virtual environment:
-
-```bash
-python3.8 -m venv .venv
+python3.8 -m venv --system-site-packages .venv
 source .venv/bin/activate
-```
-
-Upgrade packaging tools, then install the project:
-
-```bash
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e '.[yolo]'
-```
-
-If you are on Windows PowerShell, activate the environment with:
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-### Verify The Installation
-
-Check that the package and YOLO dependency import correctly:
-
-```bash
-python -c "import data_collect_dag; import ultralytics; print(ultralytics.__version__)"
-```
-
-If `ultralytics` is still missing after the editable install, install it explicitly:
-
-```bash
-python -m pip install '.[yolo]'
-```
-
-## Install directly from GitHub
-
-On Ubuntu 20.04 with ROS Noetic and Python 3.8, after activating the
-intended Python environment and sourcing your ROS workspace:
-
-```bash
-python -m pip install 'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git'
+source /opt/ros/noetic/setup.bash
+python -m pip install -e .
 data_collect_dag --help
 ```
 
-For the Python runtime without YOLO, omit `[yolo]`. For development and
-tests use `python -m pip install -e '.[test,yolo]'`. Optional groups:
+Alternatively use `conda create -n dcd python=3.8 -y` and `conda activate dcd`
+before installation. Ensure ROS Python packages can be imported in that
+environment.
 
-- `yolo`: Ultralytics-based inference (PyTorch is pulled in by its requirements).
-- `yolo-export`: additional Ultralytics model export dependencies.
-- `tools`: point-cloud utility Open3D and YOLO filtering utility tqdm;
-  these scripts remain in the repository and are not installed as CLI entry points.
-- `test`: pytest.
+Install the base package directly from GitHub without cloning:
 
-The project requires **Python 3.8**. ROS1 Noetic (`rospy`, `roslib`,
-`genpy`, ROS message packages including custom `igv_msgs`/`bdstar`)
-must still be installed or built separately, and the corresponding setup
-scripts must be sourced. Pip cannot install or configure a ROS master.
-For Jetson/ARM, install the platform-compatible PyTorch and torchvision
-builds before installing the YOLO extra; generic pip dependency
-resolution can replace hardware-specific builds. Consult `setup.bash`
-for the platform-specific path.
+```bash
+python -m pip install 'git+https://github.com/permanentchange/DataCollectDAG.git'
+```
 
-The example YAML, calibration JSON, ROS bag and YOLO model weights are
-not included in the installed Python distribution. Keep them separately,
-and use absolute paths in your configuration to avoid depending on
-the current working directory.
+### Run without inference dependencies (FPS)
+
+From a repository checkout, with `roscore` running in another shell and
+the correct ROS workspace sourced:
+
+```bash
+data_collect_dag --config demo/cfg.yaml --pipeline fps
+```
+
+This pipeline does not use YOLO/ONNX inference; it **does** require ROS
+topics, custom ROS messages (for example `igv_msgs` / `bdstar`),
+calibration and ordinary image/point-cloud dependencies. For remote pip
+installs, supply your own local YAML and calibration files; `demo/` is
+not included in the installed Python distribution.
+
+### Opt-in inference dependencies
+
+Install only what the selected pipeline needs:
+
+```bash
+# YOLO with Ultralytics (Ultralytics resolves its own dependencies)
+python -m pip install -e '.[yolo]'
+
+# Optional ONNX Runtime on a CPU system (only if needed)
+python -m pip install -e '.[onnx-cpu]'
+
+# Optional ONNX Runtime on a compatible CUDA system (only if needed)
+python -m pip install -e '.[onnx-gpu]'
+
+# Test dependencies, without inference backends
+python -m pip install -e '.[test]'
+```
+
+For remote YOLO installation:
+
+```bash
+python -m pip install 'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git'
+```
+
+`onnx-cpu` and `onnx-gpu` each include `onnx` and one ONNX Runtime
+distribution, but **must not be installed together**: the `onnxruntime`
+and `onnxruntime-gpu` distributions conflict. The optional `yolo-export`
+extra installs further Ultralytics export dependencies. If you run an
+ONNX YOLO model *through Ultralytics*, you still need `[yolo]` in
+addition to an ONNX Runtime backend. Pure FPS workflows need neither.
+
+There are **not separate CPU/CUDA Ultralytics pip packages**. The PyTorch
+build and the YOLO node's `device` setting determine the device.
+For non-TensorRT models, set `device: auto` in a YOLO node to prefer CUDA
+and fall back to CPU if CUDA is unavailable or inference fails; `device: cpu` forces CPU. An explicitly configured CUDA device still fails fast
+if CUDA is unavailable. TensorRT `.engine` models cannot be moved to
+CPU automatically.
+
+**Jetson / ARM:** install the JetPack-compatible `torch` and
+`torchvision` builds using your device vendor's guidance before adding
+Ultralytics. Running `bash setup.bash arm` pins those two already
+installed versions while resolving Ultralytics and fails if they are
+missing or incompatible. It does **not** uninstall/reinstall PyTorch.
+For a non-YOLO ARM pipeline, just install the base package with
+`bash setup.bash base`; no PyTorch is required. GPU ONNX Runtime wheels
+likewise depend on the target CUDA/JetPack version, and some ARM/Python
+combinations require a vendor-provided wheel rather than `[onnx-gpu]`.
+If a GPU ONNX Runtime build is incompatible, uninstall
+`onnxruntime-gpu` before installing the CPU distribution; they should
+not coexist.
+
+`setup.bash` modes are `base` (the default), `yolo`, `cpu`, `gpu`,
+`arm`, `onnx-cpu`, and `onnx-gpu`. The `cpu` and `gpu` installer
+aliases both install the same Ultralytics package; the inference device
+is chosen at runtime by YAML configuration.
+
+### Verify
+
+Base package (no inference imports required):
+
+```bash
+python -c "import data_collect_dag; from data_collect_dag.cli import main; print(data_collect_dag.__version__)"
+data_collect_dag --help
+```
+
+If you installed `[yolo]`, you can additionally check it:
+
+```bash
+python -c "from ultralytics import YOLO; print('YOLO ready')"
+```
 
 ## Demo Setup
 
@@ -223,24 +249,15 @@ Place a valid `.pt` file at `demo/models/yolo_person_model.pt`, or update `model
 
 ### `ModuleNotFoundError: ultralytics`
 
-Reinstall the package in the active environment:
+This is expected on base-only installations if you start a YOLO pipeline.
+Install the optional `[yolo]` extra in the active environment:
 
 ```bash
 python -m pip install -e '.[yolo]'
 ```
 
-If needed, install the dependency directly:
-
-```bash
-python -m pip install "ultralytics>=8.4,<9"
-```
-
-If you are using `venv`, confirm the environment is active before reinstalling:
-
-```bash
-source .venv/bin/activate
-python -m pip install -e '.[yolo]'
-```
+On Jetson, preserve vendor-specific PyTorch and Torchvision builds with
+`bash setup.bash arm` instead of reinstalling them from a generic index.
 
 ### ROS message resolution errors
 
