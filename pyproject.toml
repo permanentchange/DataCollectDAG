@@ -8,6 +8,22 @@ version = "0.1.0"
 description = "ROS1-oriented data collection DAG demo runtime"
 readme = "docs/requirements.md"
 requires-python = ">=3.8,<3.9"
+dependencies = [
+    "numpy>=1.17,<2",
+    "PyYAML>=5.3,<7",
+    "Pillow>=7,<11",
+    "opencv-python>=4.5,<4.12",
+    "rospkg>=1.4,<2",
+]
+
+[project.optional-dependencies]
+yolo = ["ultralytics>=8.4,<9"]
+yolo-export = ["ultralytics[export]>=8.4,<9"]
+tools = [
+    "open3d>=0.18,<0.19",
+    "tqdm>=4.60,<5",
+]
+test = ["pytest>=7,<9"]
 
 [project.scripts]
 data_collect_dag = "data_collect_dag.cli:main"
