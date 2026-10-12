@@ -6,11 +6,12 @@ import numpy as np
 from PIL import Image
 
 from data_collect_dag.diagnostics import (
-    filter_points_by_base_height, height_to_rgb, project_base_points
+    height_to_rgb, project_base_points
 )
 
-MIN_Z, MAX_Z = -2.0, 3.0
 DEFAULT_RANGE = (0.2, 20.0)
+DEFAULT_PCD_RANGE = (-10.0, 10.0, -10.0, 10.0, 0.2, 2.0)
+
 LABELS = {"x": "base_x_m", "y": "base_y_m", "z": "base_z_m", "d": "base_distance_m"}
 NEG_RANGE = re.compile(r"^-[\d.]+(?:[eE][+-]?\d+)?,-?[\d.]+(?:[eE][+-]?\d+)?$")
 
@@ -37,6 +38,15 @@ def parse_range(s):
     return a, b
 
 
+def filter_pcd_range(points, pcd_range):
+    xmin, xmax, ymin, ymax, zmin, zmax = pcd_range
+    return points[
+        (points[:, 0] >= xmin) & (points[:, 0] <= xmax) &
+        (points[:, 1] >= ymin) & (points[:, 1] <= ymax) &
+        (points[:, 2] >= zmin) & (points[:, 2] <= zmax)
+    ]
+
+
 def values(points, mode):
     return {
         "x": lambda: points[:, 0],
@@ -50,16 +60,17 @@ def draw(image, pixels, colors):
     out = image.copy()
     h, w = out.shape[:2]
     for (x, y), c in zip(pixels, colors):
-        out[max(0, y-1):min(h, y+2), max(0, x-1):min(w, x+2)] = c
+        out[max(0, y - 1):min(h, y + 2), max(0, x - 1):min(w, x + 2)] = c
     return out
 
 
-def render(root, stem, color_by="d", color_range=DEFAULT_RANGE):
+def render(root, stem, color_by="d", color_range=DEFAULT_RANGE,
+           pcd_range=DEFAULT_PCD_RANGE, suffix=""):
     config = root / "camera_config" / f"{stem}.json"
     pcd = root / "lidar_point_cloud_0" / f"{stem}.pcd"
     cameras = json.loads(config.read_text())["items"]
 
-    points = filter_points_by_base_height(load_pcd(pcd), MIN_Z, MAX_Z)
+    points = filter_pcd_range(load_pcd(pcd), pcd_range)
     low, high = color_range
 
     out_dir = root / "diagnostics" / "projection" / stem
@@ -81,7 +92,9 @@ def render(root, stem, color_by="d", color_range=DEFAULT_RANGE):
         ], np.float64)
 
         T = np.asarray(cam["camera_external"], np.float64).reshape(4, 4, order="F")
-        pixels, stats = project_base_points(points, K, T, image.shape[1], image.shape[0])
+        pixels, stats = project_base_points(
+            points, K, T, image.shape[1], image.shape[0]
+        )
 
         cp = np.c_[points, np.ones(len(points))] @ T.T
         front = cp[:, 2] > 0
@@ -93,8 +106,11 @@ def render(root, stem, color_by="d", color_range=DEFAULT_RANGE):
             (px[:, 1] >= 0) & (px[:, 1] < image.shape[0])
         )
 
-        colors = height_to_rgb(values(points[front][inside], color_by), low, high)
-        output = out_dir / f"camera_{i}_projected.jpg"
+        colors = height_to_rgb(
+            values(points[front][inside], color_by), low, high
+        )
+
+        output = out_dir / f"camera_{i}_projected{suffix}.jpg"
         Image.fromarray(draw(image, pixels, colors)).save(output, quality=95)
 
         reports.append({
@@ -103,13 +119,28 @@ def render(root, stem, color_by="d", color_range=DEFAULT_RANGE):
             "projection_image": str(output),
             "camera_matrix": K.tolist(),
             "base_to_camera": T.tolist(),
-            "height_filter": {"axis": "base_z_m", "range_m": [MIN_Z, MAX_Z]},
-            "color": {"mode": color_by, "axis": LABELS[color_by], "range": [low, high]},
+            "pcd_range": {
+                "xmin": pcd_range[0],
+                "xmax": pcd_range[1],
+                "ymin": pcd_range[2],
+                "ymax": pcd_range[3],
+                "zmin": pcd_range[4],
+                "zmax": pcd_range[5],
+            },
+            "color": {
+                "mode": color_by,
+                "axis": LABELS[color_by],
+                "range": [low, high]
+            },
             **stats
         })
 
-    report = out_dir / "projection_report.json"
-    report.write_text(json.dumps({"pointcloud": str(pcd), "cameras": reports}, indent=2))
+    report = out_dir / f"projection_report{suffix}.json"
+    report.write_text(json.dumps({
+        "pointcloud": str(pcd),
+        "cameras": reports
+    }, indent=2))
+
     return report
 
 
@@ -119,9 +150,29 @@ def main():
     p.add_argument("stem")
     p.add_argument("--color-by", choices=LABELS, default="d")
     p.add_argument("--color-range", type=parse_range, default=DEFAULT_RANGE)
+    p.add_argument(
+        "--pcd-range",
+        nargs=6,
+        type=float,
+        metavar=("XMIN", "XMAX", "YMIN", "YMAX", "ZMIN", "ZMAX"),
+        default=DEFAULT_PCD_RANGE
+    )
+    p.add_argument("--suffix", default="")
+
     a = p.parse_args()
 
-    print(render(a.session_root, a.stem, a.color_by, a.color_range))
+    xmin, xmax, ymin, ymax, zmin, zmax = a.pcd_range
+    if xmin >= xmax or ymin >= ymax or zmin >= zmax:
+        p.error("--pcd-range must satisfy xmin<xmax, ymin<ymax, zmin<zmax")
+
+    print(render(
+        a.session_root,
+        a.stem,
+        a.color_by,
+        a.color_range,
+        a.pcd_range,
+        a.suffix
+    ))
 
 
 if __name__ == "__main__":

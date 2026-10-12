@@ -2,16 +2,16 @@
 set -e
 
 roots=(
-"/home/xfzhou/workspace/DataCollectDAG/data_collect_0821/part01"
-"/home/xfzhou/workspace/DataCollectDAG/data_collect_0821/part02"
-"/home/xfzhou/workspace/DataCollectDAG/data_collect_0821/part03"
-"/home/xfzhou/workspace/DataCollectDAG/data_collect_0821/part04"
-"/home/xfzhou/workspace/DataCollectDAG/data_collect_0821/part05"
+"/mnt/c/Users/Xiufeng Zhou/Desktop/workspace/20260923_pici2/part01"
+"/mnt/c/Users/Xiufeng Zhou/Desktop/workspace/20260923_pici2/part02"
+"/mnt/c/Users/Xiufeng Zhou/Desktop/workspace/20260923_pici2/part03"
+"/mnt/c/Users/Xiufeng Zhou/Desktop/workspace/20260923_pici2/part04"
 )
 
-output_root="/mnt/c/Users/Xiufeng Zhou/Desktop/data_collect_0821"
+output_root="/mnt/c/Users/Xiufeng Zhou/Desktop/workspace/20260923_pici2"
 
-for index_id in {0..4}; do
+len_roots=${#roots[@]}
+for index_id in {0..$len_roots-1}; do
     root="${roots[$index_id]}"
     output_zip="${output_root}_part${index_id}.zip"
 
