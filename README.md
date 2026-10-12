@@ -57,7 +57,7 @@ conda activate dcd
 Install the project:
 
 ```bash
-python -m pip install -e .
+python -m pip install -e '.[yolo]'
 ```
 
 ### Option 2: Install With `python -m venv`
@@ -73,7 +73,7 @@ Upgrade packaging tools, then install the project:
 
 ```bash
 python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
+python -m pip install -e '.[yolo]'
 ```
 
 If you are on Windows PowerShell, activate the environment with:
@@ -93,8 +93,41 @@ python -c "import data_collect_dag; import ultralytics; print(ultralytics.__vers
 If `ultralytics` is still missing after the editable install, install it explicitly:
 
 ```bash
-python -m pip install "ultralytics>=8.4,<9"
+python -m pip install '.[yolo]'
 ```
+
+## Install directly from GitHub
+
+On Ubuntu 20.04 with ROS Noetic and Python 3.8, after activating the
+intended Python environment and sourcing your ROS workspace:
+
+```bash
+python -m pip install 'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git'
+data_collect_dag --help
+```
+
+For the Python runtime without YOLO, omit `[yolo]`. For development and
+tests use `python -m pip install -e '.[test,yolo]'`. Optional groups:
+
+- `yolo`: Ultralytics-based inference (PyTorch is pulled in by its requirements).
+- `yolo-export`: additional Ultralytics model export dependencies.
+- `tools`: point-cloud utility Open3D and YOLO filtering utility tqdm;
+  these scripts remain in the repository and are not installed as CLI entry points.
+- `test`: pytest.
+
+The project requires **Python 3.8**. ROS1 Noetic (`rospy`, `roslib`,
+`genpy`, ROS message packages including custom `igv_msgs`/`bdstar`)
+must still be installed or built separately, and the corresponding setup
+scripts must be sourced. Pip cannot install or configure a ROS master.
+For Jetson/ARM, install the platform-compatible PyTorch and torchvision
+builds before installing the YOLO extra; generic pip dependency
+resolution can replace hardware-specific builds. Consult `setup.bash`
+for the platform-specific path.
+
+The example YAML, calibration JSON, ROS bag and YOLO model weights are
+not included in the installed Python distribution. Keep them separately,
+and use absolute paths in your configuration to avoid depending on
+the current working directory.
 
 ## Demo Setup
 
@@ -193,7 +226,7 @@ Place a valid `.pt` file at `demo/models/yolo_person_model.pt`, or update `model
 Reinstall the package in the active environment:
 
 ```bash
-python -m pip install -e .
+python -m pip install -e '.[yolo]'
 ```
 
 If needed, install the dependency directly:
@@ -206,7 +239,7 @@ If you are using `venv`, confirm the environment is active before reinstalling:
 
 ```bash
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e '.[yolo]'
 ```
 
 ### ROS message resolution errors

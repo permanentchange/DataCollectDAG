@@ -12,17 +12,16 @@ fi
 echo "Selected mode: $MODE"
 
 pip install -U pip setuptools wheel
-pip install rospkg
 
 case "$MODE" in
     gpu)
         echo "Installing for x86 GPU device..."
-        pip install "ultralytics[export]"
+        pip install -e ".[yolo-export]"
         ;;
 
     cpu)
         echo "Installing for x86 CPU device..."
-        pip install ultralytics
+        pip install -e ".[yolo]"
         ;;
 
     arm)
@@ -51,7 +50,7 @@ case "$MODE" in
 esac
 
 echo "Installing current project..."
-pip install -e .
+echo "Package installed with the selected optional dependencies."
 echo "Downloading models..."
 mkdir -p demo/models && cd demo/models && python -c "from ultralytics import YOLO; m=YOLO('yolo26m.pt'); m=YOLO('yolo26l.pt')" && cd $PWD
 echo "Done."
