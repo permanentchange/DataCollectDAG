@@ -1,56 +1,56 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-set -e
-PWD=$(pwd -P)
-MODE=$1
+set -euo pipefail
 
-if [ -z "$MODE" ]; then
-    echo "Usage: bash run.sh [gpu|cpu|arm]"
-    exit 1
-fi
-
-echo "Selected mode: $MODE"
-
-pip install -U pip setuptools wheel
+# Usage: bash setup.bash [base|yolo|cpu|gpu|arm|onnx-cpu|onnx-gpu]
+# Base installs no Ultralytics, PyTorch, Torchvision, ONNX, or ONNX Runtime.
+MODE="${1:-base}"
 
 case "$MODE" in
-    gpu)
-        echo "Installing for x86 GPU device..."
-        pip install -e ".[yolo-export]"
+    base)
+        echo "Installing the base DataCollectDAG runtime (no inference packages)..."
+        python -m pip install -e .
         ;;
-
-    cpu)
-        echo "Installing for x86 CPU device..."
-        pip install -e ".[yolo]"
+    yolo|cpu|gpu)
+        echo "Installing DataCollectDAG with optional Ultralytics inference..."
+        # Ultralytics is the same package for CUDA and CPU. The selected
+        # PyTorch build and the pipeline's 'device' setting determine where
+        # inference runs; 'device: auto' can fall back to CPU.
+        python -m pip install -e ".[yolo]"
         ;;
-
     arm)
-        echo "Installing for ARM Jetson device..."
-        pip install "ultralytics[export]"
-        pip uninstall torch torchvision -y
+        echo "Installing YOLO on ARM, preserving the preinstalled vendor PyTorch..."
+        # Do NOT replace the device-specific torch/torchvision wheels.
+        # Constrain pip to their exact installed versions and fail on conflict.
+        constraint_file=$(mktemp)
+        trap 'rm -f "$constraint_file"' EXIT
+        python - "$constraint_file" <<'PY'
+from importlib import metadata
+from pathlib import Path
+import sys
 
-        if [ -f wheels/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl ]; then
-            pip install wheels/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
-        else
-            pip install https://github.com/ultralytics/assets/releases/download/v0.0.0/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
-        fi
-
-        if [ -f wheels/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl ]; then
-            pip install wheels/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl
-        else
-            pip install https://github.com/ultralytics/assets/releases/download/v0.0.0/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl
-        fi
+constraints = []
+for package in ("torch", "torchvision"):
+    try:
+        version = metadata.version(package)
+    except metadata.PackageNotFoundError:
+        raise SystemExit(
+            "ARM YOLO requires a JetPack-compatible " + package +
+            " to be installed first. Use 'base' for workflows without YOLO."
+        )
+    constraints.append("{}=={}".format(package, version))
+Path(sys.argv[1]).write_text("\n".join(constraints) + "\n")
+PY
+        python -m pip install -c "$constraint_file" -e ".[yolo]"
         ;;
-
+    onnx-cpu|onnx-gpu)
+        echo "Installing optional $MODE dependencies..."
+        python -m pip install -e ".[$MODE]"
+        ;;
     *)
-        echo "Unknown mode: $MODE"
-        echo "Usage: bash run.sh [gpu|cpu|arm]"
+        echo "Usage: bash setup.bash [base|yolo|cpu|gpu|arm|onnx-cpu|onnx-gpu]" >&2
         exit 1
         ;;
 esac
 
-echo "Installing current project..."
-echo "Package installed with the selected optional dependencies."
-echo "Downloading models..."
-mkdir -p demo/models && cd demo/models && python -c "from ultralytics import YOLO; m=YOLO('yolo26m.pt'); m=YOLO('yolo26l.pt')" && cd $PWD
-echo "Done."
+echo "Installed. Example models and configs remain separate from the package."
