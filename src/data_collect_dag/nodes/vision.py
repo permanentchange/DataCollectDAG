@@ -112,11 +112,13 @@ class YoloGateNode(BaseNode):
                 "conf": self._predict_conf,
                 "verbose": self._verbose,
             }
-            if self._device is not None and (self._model_suffix != ".engine" or self._device != "cpu"):
-                predict_kwargs["device"] = self._device
             if self._imgsz is not None:
                 predict_kwargs["imgsz"] = self._imgsz
             with self._predict_lock:
+                # Read and update device under the same lock, so another
+                # sample cannot use a stale CUDA device after CPU fallback.
+                if self._device is not None and (self._model_suffix != ".engine" or self._device != "cpu"):
+                    predict_kwargs["device"] = self._device
                 try:
                     results = self._model.predict(**predict_kwargs)
                 except Exception:
