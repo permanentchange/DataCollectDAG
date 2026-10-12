@@ -122,18 +122,48 @@ and fall back to CPU if CUDA is unavailable or inference fails; `device: cpu` fo
 if CUDA is unavailable. TensorRT `.engine` models cannot be moved to
 CPU automatically.
 
-**Jetson / ARM:** install the JetPack-compatible `torch` and
-`torchvision` builds using your device vendor's guidance before adding
-Ultralytics. Running `bash setup.bash arm` pins those two already
-installed versions while resolving Ultralytics and fails if they are
-missing or incompatible. It does **not** uninstall/reinstall PyTorch.
-For a non-YOLO ARM pipeline, just install the base package with
-`bash setup.bash base`; no PyTorch is required. GPU ONNX Runtime wheels
-likewise depend on the target CUDA/JetPack version, and some ARM/Python
-combinations require a vendor-provided wheel rather than `[onnx-gpu]`.
-If a GPU ONNX Runtime build is incompatible, uninstall
-`onnxruntime-gpu` before installing the CPU distribution; they should
-not coexist.
+**Jetson / ARM:** the `arm` installer intentionally **uninstalls and
+reinstalls** PyTorch/Torchvision using vendor-specific wheels supplied
+in `~/wheels`. Do not use the generic `[yolo]` pip install on Jetson
+unless you have separately handled its PyTorch requirements. Place
+the compatible wheel pair in `~/wheels`, then run from a repository
+checkout:
+
+```bash
+# Example supported wheel names for one known Jetson / Python 3.8 build:
+# ~/wheels/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
+# ~/wheels/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl
+
+bash setup.bash arm
+```
+
+The script **checks that both files exist before uninstalling** either
+package, prefers the two known filenames when present, or accepts a
+single `torch-*.whl` and `torchvision-*.whl` from the directory.
+When you maintain multiple JetPack/Python builds, select the desired
+files explicitly:
+
+```bash
+DCD_WHEEL_DIR="$HOME/wheels" \
+DCD_TORCH_WHEEL="$HOME/wheels/torch-YOUR_VERSION.whl" \
+DCD_TORCHVISION_WHEEL="$HOME/wheels/torchvision-YOUR_VERSION.whl" \
+bash setup.bash arm
+```
+
+PyTorch/Torchvision are installed from the supplied wheel files with
+their dependencies temporarily disabled; the script then installs
+`[yolo]` while constraining pip to the **just-installed wheel versions**.
+If an Ultralytics dependency conflicts, installation fails rather than
+silently replacing Jetson PyTorch with an incompatible build. Verify
+that your wheel pair is compatible with the device's CUDA/JetPack
+and Python version.
+
+For a non-YOLO ARM pipeline, run `bash setup.bash base`; no PyTorch
+is installed, uninstalled, or imported by the FPS DAG. The optional
+`onnx-cpu` and `onnx-gpu` modes also look in `~/wheels` when it exists.
+GPU ONNX Runtime wheels depend on the CUDA/JetPack version and may need
+vendor-provided builds. Uninstall `onnxruntime-gpu` before switching
+to `onnxruntime`; they should not coexist.
 
 `setup.bash` modes are `base` (the default), `yolo`, `cpu`, `gpu`,
 `arm`, `onnx-cpu`, and `onnx-gpu`. The `cpu` and `gpu` installer
@@ -256,8 +286,9 @@ Install the optional `[yolo]` extra in the active environment:
 python -m pip install -e '.[yolo]'
 ```
 
-On Jetson, preserve vendor-specific PyTorch and Torchvision builds with
-`bash setup.bash arm` instead of reinstalling them from a generic index.
+On Jetson, use `bash setup.bash arm` with compatible wheels in
+`~/wheels`; the script reinstalls those specific builds rather than
+fetching generic PyTorch from an online package index.
 
 ### ROS message resolution errors
 
