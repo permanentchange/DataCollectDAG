@@ -13,13 +13,28 @@ from data_collect_dag.sample_context import MissingContextKeyError
 
 
 def _load_yolo_class():
-    from ultralytics import YOLO
+    # Import only when a pipeline actually contains a YOLO node.
+    try:
+        from ultralytics import YOLO
+    except ImportError as exc:
+        raise RuntimeError(
+            "YOLO inference requires the optional ultralytics dependencies. "
+            "Install data-collect-dag[yolo] or supply compatible inference "
+            "packages for your platform."
+        ) from exc
 
     return YOLO
 
 
 def _load_torch_module():
-    import torch
+    # Never import torch for non-YOLO pipelines.
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError(
+            "A CUDA YOLO device requires a compatible PyTorch installation. "
+            "On Jetson, use the vendor-matched torch build, or select device: cpu."
+        ) from exc
 
     return torch
 
@@ -36,6 +51,7 @@ class YoloGateNode(BaseNode):
         self._target_thresholds: Dict[str, Dict[str, float]] = {}
         self._predict_conf = 0.25
         self._device: Optional[str] = None
+        self._auto_device = False
         self._imgsz = None
         self._verbose = False
         self._predict_lock = threading.Lock()
@@ -58,10 +74,25 @@ class YoloGateNode(BaseNode):
             for index, class_name in enumerate(self._class_names)
         }
         self._predict_conf = float(self.config["predict_conf"])
-        self._device = _normalize_device(self.config.get("device", "cpu"))
+        requested_device = _normalize_device(self.config.get("device", "cpu"))
+        self._auto_device = requested_device == "auto" and self._model_suffix != ".engine"
+        if self._auto_device:
+            # Prefer CUDA when available; do not require it for auto mode.
+            try:
+                _validate_torch_cuda_available("0")
+            except (RuntimeError, ValueError, ImportError) as exc:
+                self.logger.info("CUDA is unavailable for YOLO auto device, using CPU: %s", exc)
+                self._device = "cpu"
+            else:
+                self._device = "0"
+        elif requested_device == "auto":
+            # TensorRT .engine files cannot be automatically rerouted to CPU.
+            self._device = None
+        else:
+            self._device = requested_device
         self._imgsz = self.config.get("imgsz")
         self._verbose = bool(self.config.get("verbose", False))
-        if self._model_suffix != ".engine" and _device_requires_cuda(self._device):
+        if not self._auto_device and self._model_suffix != ".engine" and _device_requires_cuda(self._device):
             _validate_torch_cuda_available(self._device)
         yolo_cls = _load_yolo_class()
         self._model = yolo_cls(self._model_spec)
@@ -86,7 +117,20 @@ class YoloGateNode(BaseNode):
             if self._imgsz is not None:
                 predict_kwargs["imgsz"] = self._imgsz
             with self._predict_lock:
-                results = self._model.predict(**predict_kwargs)
+                try:
+                    results = self._model.predict(**predict_kwargs)
+                except Exception:
+                    if not self._auto_device or not _device_requires_cuda(self._device):
+                        raise
+                    # Only auto-selected CUDA retries on CPU. Explicit CUDA
+                    # requests preserve the fail-fast behavior.
+                    self.logger.warning(
+                        "YOLO CUDA inference failed; retrying this and subsequent samples on CPU",
+                        exc_info=True,
+                    )
+                    self._device = "cpu"
+                    predict_kwargs["device"] = "cpu"
+                    results = self._model.predict(**predict_kwargs)
         except Exception as exc:
             self.logger.exception("yolo gate inference failed sample_id=%s node_id=%s", sample.sample_id, self.node_id)
             return NodeOutcome(
