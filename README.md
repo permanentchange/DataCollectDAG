@@ -118,8 +118,7 @@ addition to an ONNX Runtime backend. Pure FPS workflows need neither.
 There are **not separate CPU/CUDA Ultralytics pip packages**. The PyTorch
 build and the YOLO node's `device` setting determine the device.
 For non-TensorRT models, set `device: auto` in a YOLO node to prefer CUDA
-and fall back to CPU if CUDA is unavailable or inference fails; `device:
-cpu` forces CPU. An explicitly configured CUDA device still fails fast
+and fall back to CPU if CUDA is unavailable or inference fails; `device: cpu` forces CPU. An explicitly configured CUDA device still fails fast
 if CUDA is unavailable. TensorRT `.engine` models cannot be moved to
 CPU automatically.
 
