@@ -1,311 +1,109 @@
 # DataCollectDAG
 
-`DataCollectDAG` is a ROS1-based data collection runtime built around configurable DAG pipelines.
-It subscribes to sensor topics, buffers and synchronizes incoming data, runs processing nodes, and saves accepted samples as structured output.
-
-The repository includes a runnable demo:
-
-- config: `demo/xtreme1_demo.yaml`
-- calibration: `demo/calibration/sa1_cali.json`
-- test rosbag: `test_data.bag`
-
-## Highlights
-
-- YAML-driven pipeline configuration
-- ROS1 topic subscription and control interface
-- time synchronization for multi-sensor data
-- point cloud motion compensation and transform nodes
-- YOLO-based image gating
-- structured dataset export
-
-## Repository Layout
-
-```text
-src/data_collect_dag/       package source
-src/data_collect_dag/nodes/ reusable DAG nodes
-tests/unit/                 unit tests
-tests/functional/           functional tests
-demo/                       demo config, calibration, model setup notes
-docs/                       design notes
-```
+DataCollectDAG is a Python 3.8 / ROS1 Noetic application for collecting sensor data with YAML-defined directed acyclic graphs (DAGs). It subscribes to configured ROS topics, synchronizes frames, runs processing nodes, and writes session results to disk.
 
 ## Requirements
 
-- Python `3.8`
-- ROS1 Noetic
-- One Python environment manager:
-  - `conda`, or
-  - the standard library `venv` module
-- ROS message definitions required by your config
+- Ubuntu with ROS1 Noetic, a running ROS master, and Python 3.8 (`>=3.8,<3.9`).
+- ROS message packages referenced by the YAML, including any custom packages such as `bdstar` and `igv_msgs`. Build them in a catkin workspace and source its setup script.
+- The calibration JSON and live ROS topics required by the selected pipeline. A ROS bag may be used for playback but is **not included** in this repository.
 
-The demo config uses custom message types such as `igv_msgs/...` and `bdstar/...`.
-Make sure those message packages are available in your ROS/Python environment before running the demo.
+The base Python package installs NumPy, PyYAML, Pillow, OpenCV and rospkg. It does **not** depend on Ultralytics, PyTorch, Torchvision, ONNX or ONNX Runtime. Inference libraries are imported only when an inference node is initialized.
 
-## Installation
+## Install
 
-The **base installation does not install** `ultralytics`, `torch`,
-`torchvision`, `onnx`, or `onnxruntime`. Pip installs only the core
-dependencies used by regular DAG pipelines, such as `fps` in
-`demo/cfg.yaml`. ROS1 Noetic and message packages must be provided
-by the host environment.
-
-Use Python 3.8. For example, using `venv`:
+From a repository checkout:
 
 ```bash
+source /opt/ros/noetic/setup.bash
+# If your YAML uses custom ROS messages:
+source /path/to/catkin_ws/devel/setup.bash
+
 python3.8 -m venv --system-site-packages .venv
 source .venv/bin/activate
-source /opt/ros/noetic/setup.bash
 python -m pip install -e .
 data_collect_dag --help
 ```
 
-Alternatively use `conda create -n dcd python=3.8 -y` and `conda activate dcd`
-before installation. Ensure ROS Python packages can be imported in that
-environment.
-
-Install the base package directly from GitHub without cloning:
+Alternatively, install the base package directly from GitHub:
 
 ```bash
-python -m pip install 'git+https://github.com/permanentchange/DataCollectDAG.git'
+python3.8 -m pip install 'git+https://github.com/permanentchange/DataCollectDAG.git'
 ```
 
-### Run without inference dependencies (FPS)
+The GitHub installation includes the Python package, **not** the `demo/` configurations, calibration files or model weights. Supply those files separately.
 
-From a repository checkout, with `roscore` running in another shell and
-the correct ROS workspace sourced:
+### Optional inference and tools
 
-```bash
-data_collect_dag --config demo/cfg.yaml --pipeline fps
-```
+In a checkout, install only the extras you need:
 
-This pipeline does not use YOLO/ONNX inference; it **does** require ROS
-topics, custom ROS messages (for example `igv_msgs` / `bdstar`),
-calibration and ordinary image/point-cloud dependencies. For remote pip
-installs, supply your own local YAML and calibration files; `demo/` is
-not included in the installed Python distribution.
-
-### Opt-in inference dependencies
-
-Install only what the selected pipeline needs:
+| Extra | Purpose |
+| --- | --- |
+| `yolo` | Ultralytics inference, including its transitive PyTorch requirements |
+| `yolo-export` | Ultralytics export dependencies |
+| `onnx-cpu` | ONNX and CPU ONNX Runtime |
+| `onnx-gpu` | ONNX and GPU ONNX Runtime |
+| `tools` | Open3D and tqdm for standalone scripts in `tools/` |
+| `test` | pytest |
 
 ```bash
-# YOLO with Ultralytics (Ultralytics resolves its own dependencies)
 python -m pip install -e '.[yolo]'
-
-# Optional ONNX Runtime on a CPU system (only if needed)
-python -m pip install -e '.[onnx-cpu]'
-
-# Optional ONNX Runtime on a compatible CUDA system (only if needed)
-python -m pip install -e '.[onnx-gpu]'
-
-# Test dependencies, without inference backends
-python -m pip install -e '.[test]'
-```
-
-For remote YOLO installation:
-
-```bash
+# Or, for a remote installation:
 python -m pip install 'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git'
 ```
 
-`onnx-cpu` and `onnx-gpu` each include `onnx` and one ONNX Runtime
-distribution, but **must not be installed together**: the `onnxruntime`
-and `onnxruntime-gpu` distributions conflict. The optional `yolo-export`
-extra installs further Ultralytics export dependencies. If you run an
-ONNX YOLO model *through Ultralytics*, you still need `[yolo]` in
-addition to an ONNX Runtime backend. Pure FPS workflows need neither.
+`onnx-cpu` and `onnx-gpu` are alternative environments; do not install both ONNX Runtime distributions together. The project does **not** implement an independent ONNX DAG node: YOLO inference, including an ONNX model loaded through Ultralytics, uses the `yolo_gate` node.
 
-There are **not separate CPU/CUDA Ultralytics pip packages**. The PyTorch
-build and the YOLO node's `device` setting determine the device.
-For non-TensorRT models, set `device: auto` in a YOLO node to prefer CUDA
-and fall back to CPU if CUDA is unavailable or inference fails; `device: cpu` forces CPU. An explicitly configured CUDA device still fails fast
-if CUDA is unavailable. TensorRT `.engine` models cannot be moved to
-CPU automatically.
+`setup.bash` installs from a checkout. Its modes are `base` (default), `yolo`, `cpu`, `gpu`, `arm`, `onnx-cpu` and `onnx-gpu`. The `cpu` and `gpu` modes install the same Ultralytics distribution; the model's runtime `device` setting selects the device.
 
-**Jetson / ARM:** the `arm` installer intentionally **uninstalls and
-reinstalls** PyTorch/Torchvision using vendor-specific wheels supplied
-in `~/wheels`. Do not use the generic `[yolo]` pip install on Jetson
-unless you have separately handled its PyTorch requirements. Place
-the compatible wheel pair in `~/wheels`, then run from a repository
-checkout:
+**Jetson/ARM:** `bash setup.bash arm` explicitly reinstalls `torch` and `torchvision` from `~/wheels` before installing the YOLO extra. Both wheel files must exist before any uninstall; afterward the Ultralytics resolver is constrained to those installed versions. The script recognizes one local wheel per package or its built-in preferred Jetson filenames. Use `DCD_WHEEL_DIR`, `DCD_TORCH_WHEEL` and `DCD_TORCHVISION_WHEEL` to select a different compatible pair. Confirm the wheel versions match the device's JetPack, CUDA and Python environment. For non-inference workflows use `bash setup.bash base`.
+
+## Run a pipeline
+
+Start `roscore` in a separate terminal; source ROS and your Python environment in the terminal running the CLI. From the repository root:
 
 ```bash
-# Example supported wheel names for one known Jetson / Python 3.8 build:
-# ~/wheels/torch-2.1.0a0+41361538.nv23.06-cp38-cp38-linux_aarch64.whl
-# ~/wheels/torchvision-0.16.2+c6f3977-cp38-cp38-linux_aarch64.whl
+# No YOLO/PyTorch required
+data_collect_dag --config demo/cfg.yaml --pipeline fps
 
-bash setup.bash arm
+# YOLO and model weights required
+data_collect_dag --config demo/cfg.yaml --pipeline fps_with_yolo
 ```
 
-The script **checks that both files exist before uninstalling** either
-package, prefers the two known filenames when present, or accepts a
-single `torch-*.whl` and `torchvision-*.whl` from the directory.
-When you maintain multiple JetPack/Python builds, select the desired
-files explicitly:
+The CLI also supports `python -m data_collect_dag --config ... --pipeline ...`. The `--config` argument is required; `--pipeline` defaults to `init`.
 
-```bash
-DCD_WHEEL_DIR="$HOME/wheels" \
-DCD_TORCH_WHEEL="$HOME/wheels/torch-YOUR_VERSION.whl" \
-DCD_TORCHVISION_WHEEL="$HOME/wheels/torchvision-YOUR_VERSION.whl" \
-bash setup.bash arm
-```
+Available sample pipelines:
 
-PyTorch/Torchvision are installed from the supplied wheel files with
-their dependencies temporarily disabled; the script then installs
-`[yolo]` while constraining pip to the **just-installed wheel versions**.
-If an Ultralytics dependency conflicts, installation fails rather than
-silently replacing Jetson PyTorch with an incompatible build. Verify
-that your wheel pair is compatible with the device's CUDA/JetPack
-and Python version.
+| Configuration | Pipeline | Inference required |
+| --- | --- | --- |
+| `demo/cfg.yaml` | `init`, `fps`, `compare_motion` | No |
+| `demo/cfg.yaml` | `fps_with_yolo` | YOLO |
+| `demo/xtreme1_demo.yaml` | `lidar_camera_1fps`, `lidar_frontcamera_1fps` | No |
+| `demo/xtreme1_demo.yaml` | `init`, `person_1fps` | YOLO |
 
-For a non-YOLO ARM pipeline, run `bash setup.bash base`; no PyTorch
-is installed, uninstalled, or imported by the FPS DAG. The optional
-`onnx-cpu` and `onnx-gpu` modes also look in `~/wheels` when it exists.
-GPU ONNX Runtime wheels depend on the CUDA/JetPack version and may need
-vendor-provided builds. Uninstall `onnxruntime-gpu` before switching
-to `onnxruntime`; they should not coexist.
+Both demo YAML files reference `demo/calibration/cali.json`. YOLO pipelines reference `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself. Some sample configurations explicitly request CUDA, so a CPU-only environment must use a non-inference pipeline or change the YOLO node's `device` setting.
 
-`setup.bash` modes are `base` (the default), `yolo`, `cpu`, `gpu`,
-`arm`, `onnx-cpu`, and `onnx-gpu`. The `cpu` and `gpu` installer
-aliases both install the same Ultralytics package; the inference device
-is chosen at runtime by YAML configuration.
+Relative values in `output.root_dir`, `calibration.path` and YOLO `model_path` are resolved against the **current working directory**, not the YAML's directory. Use absolute paths when launching from elsewhere. The convenience script `bash run.sh /absolute/path/config.yaml [pipeline_name]` changes its working directory to the repository root.
 
-### Verify
+## ROS control and results
 
-Base package (no inference imports required):
+The demo configurations use `/data_collect/control` and `/data_collect/status`, both with `std_msgs/String` messages containing JSON. The control commands are `start`, `pause`, `resume` and `stop`. Optional `std_srvs/Trigger` services can also be configured. See [ROS control interface](docs/ros_external_system_architecture.md).
 
-```bash
-python -c "import data_collect_dag; from data_collect_dag.cli import main; print(data_collect_dag.__version__)"
-data_collect_dag --help
-```
+Results are written under `<output.root_dir>/<session_id>/`:
 
-If you installed `[yolo]`, you can additionally check it:
+- `debug.log` — session log.
+- `session_summary.json` — end state, timings/metrics and errors.
+- `saved_samples.json` — index of saved samples.
+- `xtreme1/<dataset_name>/` — JPEG images, ASCII PCD and camera JSON, if an Xtreme1 save node runs.
 
-```bash
-python -c "from ultralytics import YOLO; print('YOLO ready')"
-```
-
-## Demo Setup
-
-The demo pipeline expects a YOLO weight file at:
-
-```text
-demo/models/yolo_person_model.pt
-```
-
-Setup instructions for that file are in:
-
-- `demo/models/README.md`
-
-## Run The Demo
-
-Open three shells from the repository root.
-
-Shell 1:
-
-```bash
-source /opt/ros/noetic/setup.bash
-conda activate dcd  # or: source .venv/bin/activate
-roscore
-```
-
-Shell 2:
-
-```bash
-source /opt/ros/noetic/setup.bash
-conda activate dcd  # or: source .venv/bin/activate
-data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect
-```
-
-Shell 3:
-
-```bash
-source /opt/ros/noetic/setup.bash
-conda activate dcd  # or: source .venv/bin/activate
-rosbag play test_data.bag
-```
-
-After playback finishes, stop the runtime with `Ctrl+C`.
-
-## Demo Pipeline Summary
-
-The `xtreme1_collect` demo pipeline:
-
-- uses `front_wide_camera` as the main trigger source
-- runs a YOLO `person` gate on the main image
-- synchronizes roof lidar, corner lidars, and fisheye cameras
-- motion-compensates point clouds directly into the base frame
-- aggregates the lidar outputs
-- saves images, point cloud, and camera config in an Xtreme1-style layout
-
-## Output
-
-Output is written under:
-
-```text
-output/<session_id>/
-```
-
-Useful files:
-
-- `output/<session_id>/session_summary.json`
-- `output/<session_id>/saved_samples.json`
-- `output/<session_id>/debug.log`
-- `output/<session_id>/xtreme1/collect_demo/...`
+See [architecture and configuration](docs/architecture.md) for node types, execution rules and YAML fields.
 
 ## Tests
 
 ```bash
-conda activate dcd
-python -m pytest
+python -m pip install -e '.[test]'
 python -m pytest tests/unit -q
 python -m pytest tests/functional -q
 ```
 
-If you are using `venv`, activate it first instead:
-
-```bash
-source .venv/bin/activate
-python -m pytest
-python -m pytest tests/unit -q
-python -m pytest tests/functional -q
-```
-
-## Common Issues
-
-### `missing yolo model_path`
-
-Place a valid `.pt` file at `demo/models/yolo_person_model.pt`, or update `model_path` in `demo/xtreme1_demo.yaml`.
-
-### `ModuleNotFoundError: ultralytics`
-
-This is expected on base-only installations if you start a YOLO pipeline.
-Install the optional `[yolo]` extra in the active environment:
-
-```bash
-python -m pip install -e '.[yolo]'
-```
-
-On Jetson, use `bash setup.bash arm` with compatible wheels in
-`~/wheels`; the script reinstalls those specific builds rather than
-fetching generic PyTorch from an online package index.
-
-### ROS message resolution errors
-
-The required custom ROS message packages are not available in the current environment, or their local paths need to be adjusted for your machine.
-
-### No samples saved
-
-Typical causes:
-
-- the YOLO gate rejected all frames
-- required topics were missing during playback
-- synchronization thresholds were too strict
-
-Check `output/<session_id>/debug.log` and `session_summary.json` first.
-
-## Related Files
-
-- `demo/xtreme1_demo.yaml`
-- `demo/models/README.md`
-- `docs/requirements.md`
+The Python tests mock ROS interactions where needed; actual acquisition still requires a live ROS environment. The repository's base-install CI also verifies that FPS DAG construction does not import inference packages.
