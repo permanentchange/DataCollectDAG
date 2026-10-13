@@ -3,6 +3,16 @@
 Uses stdlib importlib.metadata and does not import optional runtime packages.
 """
 from importlib import metadata
+from pathlib import Path
+import re
+
+from data_collect_dag import __version__
+
+
+def test_source_version_matches_project_metadata():
+    project = (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
+    declared = re.search(r'^version\s*=\s*"([^"]+)"', project, re.MULTILINE).group(1)
+    assert __version__ == declared
 
 
 def test_runtime_dependencies_are_declared():

@@ -37,6 +37,12 @@ data_collect_dag --init-demo ~/dcd-demo --car-id sa4
 data_collect_dag --config ~/dcd-demo/cfg.yaml --pipeline fps_undist
 ```
 
+Use the same `pip install --upgrade` command when updating an existing installation. Release versions are declared in `pyproject.toml` and package `__version__`, and must be advanced together when publishing changed code. Updating the package does not change previously exported configurations; export templates separately when needed. To check the installed version:
+
+```bash
+python3.8 -m pip show data-collect-dag
+```
+
 Wheel and source distributions include demo YAML and calibration JSON templates. `--init-demo DIR` exports them offline without starting ROS, and creates a `models/` directory for your own weights. Use `--car-id sa4` to export only that car's calibration; car IDs are case-insensitive. Omit `--car-id` to export all available cars with SA4 selected in the configuration. Unknown IDs fail before writing and list the available cars. All demo YAML files are exported; `--pipeline` does not filter them. Model weights, ROS bags and collection results are not bundled. Review the example calibration, topics and storage settings before collecting on your device.
 
 Calibrations are organized as `calibration/<car-id>/cali.json`, without a top-level default file or symlink. Exported calibration and model references use absolute paths under `DIR`, so you can run from any working directory. For example:
