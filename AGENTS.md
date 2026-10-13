@@ -1,34 +1,35 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Source of truth
 
-Core package code lives in `src/data_collect_dag/`. Keep runtime orchestration in top-level modules such as `app.py`, `session.py`, and `dag.py`; place reusable node implementations under `src/data_collect_dag/nodes/`. Tests are split by scope into `tests/unit/` and `tests/functional/`. Demo and calibration inputs live in `demo/`, and design notes live in `docs/` (`architecture.md`, `requirements.md`).
+Use the implementation in `src/data_collect_dag/`, the currently committed demo YAML files, and `pyproject.toml` as the authority for documented behavior. Do not turn design proposals, uncommitted files, or local ROS bags into claims about supported features. Keep documentation concise and executable; update it when changing interfaces or packaging.
 
-## Build, Test, and Development Commands
+## Layout
 
-- `conda activate dcd` enters the expected local development and test environment.
-- `conda create -n dcd python=3.8 -y` creates that environment when it does not already exist.
-- `python -m pip install -e .` installs the package in editable mode.
-- `python -m pip install "ultralytics>=8.4,<9"` is only a fallback if `python -m pip install -e .` did not install the declared YOLO dependency in the current environment.
-- `python -m pytest` runs the full test suite.
-- `python -m pytest tests/unit -q` runs fast unit coverage only.
-- `python -m pytest tests/functional -q` runs session/runtime integration checks.
-- `data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect` starts the demo pipeline through the published CLI entry point.
+- `src/data_collect_dag/app.py`, `session.py`, `dag.py`: application, session lifecycle and DAG execution.
+- `src/data_collect_dag/config.py` and `models.py`: config validation and shared types.
+- `src/data_collect_dag/ros_adapter.py`, `ros_messages.py`, `ros_env.py`: ROS1 integration and message resolution.
+- `src/data_collect_dag/nodes/`: built-in processing nodes. Register new nodes in `session.py::NODE_TYPES`.
+- `demo/cfg.yaml` and `demo/xtreme1_demo.yaml`: example pipelines; calibration files are under `demo/calibration/`.
+- `tests/unit/` and `tests/functional/`: pytest coverage.
+- `README.md`: user setup and commands; `docs/architecture.md`: runtime/config reference; `docs/ros_external_system_architecture.md`: ROS control contract.
 
-Use Python `3.8` for local work; `pyproject.toml` pins `>=3.8,<3.9`. Install dependencies inside the `dcd` environment with either `pip` or `conda`, depending on package availability and local constraints.
+## Development and tests
 
-## Coding Style & Naming Conventions
+Target Python 3.8 (`>=3.8,<3.9`) and ROS1 Noetic. The Python package is not a replacement for the ROS installation or generated custom message packages.
 
-Follow the existing Python style: 4-space indentation, explicit imports, type hints where behavior crosses module boundaries, and `pathlib.Path` for filesystem paths. Use `snake_case` for functions, modules, variables, and test names; use `PascalCase` for classes. Match the current package layout instead of introducing new top-level folders. No formatter or linter config is committed here, so keep changes consistent with nearby code and avoid broad style-only edits.
+```bash
+python -m pip install -e '.[test]'
+python -m pytest tests/unit -q
+python -m pytest tests/functional -q
+```
 
-## Testing Guidelines
+For an inference pipeline, add the optional `yolo` extra. For Jetson installations, use `bash setup.bash arm` with device-compatible wheels in `~/wheels`; the base installation must not install or import torch, torchvision, Ultralytics, or ONNX.
 
-Tests use `pytest`. Name files `test_*.py` and keep unit tests close to a single module or node behavior. Add functional coverage when changing session lifecycle, CLI behavior, ROS adapter flow, or DAG execution wiring. Prefer assertions against observable outputs and status transitions over internal implementation details.
+`demo/cfg.yaml` supports `fps` without inference dependencies. `demo/xtreme1_demo.yaml` also has non-YOLO pipelines; its `init` and `person_1fps` pipelines require a model at `demo/models/yolo26m.pt`. A ROS master, the configured topics and any bag used for playback are external resources.
 
-## Commit & Pull Request Guidelines
+## Code and review conventions
 
-Recent history uses short conventional prefixes. Preferred examples include `feat:`, `fix:`, `perf:`, `refactor:`, `test:`, `docs:`, `build:`, `ci:`, `style:`, and `chore:`; use another standard prefix when it matches the change more precisely. Keep commit subjects imperative and specific, for example `fix: handle empty sync window`. PRs should state the behavior change, note config or pipeline impacts, link the relevant issue if one exists, and include test evidence. Attach sample output or screenshots only when the change affects operator-visible status or generated artifacts.
+Use 4-space indentation, type hints for module boundaries, `snake_case` names and `PascalCase` classes. Prefer `pathlib.Path` for file paths. Follow nearby code conventions; no formatter or linter configuration is committed. Keep ROS subscription callbacks lightweight; processing belongs in DAG nodes.
 
-## Configuration & ROS Notes
-
-Configuration is YAML-driven; use `demo/xtreme1_demo.yaml` as the reference shape for new pipelines. Keep ROS-facing code lightweight and confined to adapter/control modules; heavy processing belongs in DAG nodes. The demo pipeline expects a YOLO weight file at `demo/models/yolo_person_model.pt`; see `demo/models/README.md` for a manual download step before running `demo/xtreme1_demo.yaml`. A local `test_data.bag` ROS bag file is available for testing; use `roscore`, then start `data_collect_dag --config demo/xtreme1_demo.yaml --pipeline xtreme1_collect`, and finally run `rosbag play test_data.bag` to simulate a recording scenario when validating ROS-integrated behavior.
+Add focused unit tests for config changes and nodes. Include functional coverage for control/session lifecycle changes. For optional backends, test that the base FPS pipeline can be imported and built without them. PR descriptions should state the behavior affected, any config or installation impact, and how it was verified. Use specific conventional commit subjects such as `fix:`, `feat:`, `docs:`, `test:` or `build:`.
