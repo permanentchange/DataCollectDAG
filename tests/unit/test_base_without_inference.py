@@ -9,11 +9,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_fps_pipeline_does_not_import_optional_inference_libraries():
+def test_fps_pipeline_does_not_import_optional_inference_libraries(tmp_path):
     # A fresh process prevents an earlier test from hiding eager imports in
     # sys.modules. The import blocker simulates an environment without ML.
     script = r'''
 import builtins
+import os
 import sys
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from data_collect_dag.session import SessionRuntime
 from data_collect_dag.status import StatusManager
 
 config = load_app_config(Path("demo/cfg.yaml"))
+config.output_root_dir = Path(os.environ["DCD_TEST_OUTPUT"])
 pipeline = config.pipelines["fps"]
 assert pipeline.nodes_by_id
 assert all(node.node_type != "yolo_gate" for node in pipeline.nodes_by_id.values())
@@ -62,6 +64,7 @@ assert not blocked.intersection(sys.modules)
 '''
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    env["DCD_TEST_OUTPUT"] = str(tmp_path)
     process = subprocess.run(
         [sys.executable, "-c", script],
         cwd=str(ROOT),

@@ -11,7 +11,7 @@ from data_collect_dag.cache import SessionInputCache
 from data_collect_dag.control import ControlCommand
 from data_collect_dag.dag import DagExecutor
 from data_collect_dag.io_utils import write_json
-from data_collect_dag.logging_utils import attach_session_log_file, configure_logging, detach_handler
+from data_collect_dag.logging_utils import BACKGROUND_LOG_FILENAME, attach_session_log_file, configure_logging, detach_handler
 from data_collect_dag.metrics import MetricsRecorder
 from data_collect_dag.models import (
     AppConfig,
@@ -43,6 +43,7 @@ from data_collect_dag.nodes import (
 from data_collect_dag.ros_adapter import RosAdapter
 from data_collect_dag.sample_context import SampleContext
 from data_collect_dag.status import StatusManager
+from data_collect_dag.storage import StorageError, StorageTracker, check_disk_free
 from data_collect_dag.summary import SummaryWriter
 
 
@@ -63,6 +64,9 @@ NODE_TYPES = {
     "yolo_gate": YoloGateNode,
     "xtreme1_structured_save": Xtreme1SaveNode,
 }
+
+STORAGE_RECONCILE_INTERVAL_SEC = 30.0
+STORAGE_LOG_INTERVAL_SEC = 1.0
 
 
 class SessionRuntime:
@@ -112,15 +116,30 @@ class SessionRuntime:
         self._state_condition = threading.Condition(self._state_lock)
         self._duration_thread = None
         self._log_handler = None
+        self._storage_stop = threading.Event()
+        self._storage_thread = None
+        self._inflight_samples = 0
+        self._storage_failure: Optional[StorageError] = None
+        self._storage_completion_sent = False
+        self.storage_tracker = (
+            StorageTracker(app_config.output_root_dir, app_config.disk_storage_limit_gb, self._check_storage)
+            if app_config.disk_storage_limit_gb else None
+        )
         self.logger = logging.getLogger("data_collect_dag.session")
 
     def start(self) -> None:
         configure_logging("DEBUG" if self.app_config.runtime.debug else None)
         try:
+            self._publish_storage()
+            if self.storage_tracker is not None:
+                self.storage_tracker.reconcile()
+                self.storage_tracker.check()
+            check_disk_free(self.app_config.output_root_dir, self.app_config.disk_storage_need_gb)
+            self._publish_storage()
             self.session_root.mkdir(parents=True, exist_ok=False)
         except Exception as exc:
             self._last_error = str(exc)
-            self.logger.exception("failed to create session directory session_id=%s", self.session_id)
+            self.logger.exception("session admission or directory creation failed session_id=%s", self.session_id)
             self.status_manager.set_last_error(self._last_error)
             self.status_manager.set_idle(RecentSessionStatus.FAILED)
             raise
@@ -168,6 +187,11 @@ class SessionRuntime:
                     daemon=True,
                 )
                 self._duration_thread.start()
+            if self.storage_tracker is not None:
+                self._storage_thread = threading.Thread(
+                    target=self._storage_monitor_loop, name=f"storage-monitor-{self.session_id}", daemon=True,
+                )
+                self._storage_thread.start()
         except Exception as exc:
             self.logger.exception("session start failed session_id=%s", self.session_id)
             cleanup_errors: List[str] = []
@@ -179,6 +203,7 @@ class SessionRuntime:
                 self._run_started_monotonic = None
                 self._state_condition.notify_all()
             self.cancel_event.set()
+            self._run_cleanup_step(cleanup_errors, "storage_monitor_shutdown", self._stop_storage_monitor)
             self._run_cleanup_step(cleanup_errors, "unbind_session", lambda: self.ros_adapter.unbind_session(self))
             for _ in self._workers:
                 try:
@@ -232,6 +257,7 @@ class SessionRuntime:
                 self.logger.exception("failed to write failed-session summary session_id=%s", self.session_id)
                 cleanup_errors.append(f"write_session_summary: {summary_exc}")
                 self._last_error = "; ".join([str(exc)] + cleanup_errors)
+            self._refresh_storage_metadata()
             self.status_manager.set_last_error(self._last_error)
             self.status_manager.set_idle(RecentSessionStatus.FAILED)
             if cleanup_errors:
@@ -266,6 +292,7 @@ class SessionRuntime:
                 self._run_started_monotonic = None
             self._state_condition.notify_all()
         self.cancel_event.set()
+        self._run_cleanup_step(cleanup_errors, "storage_monitor_shutdown", self._stop_storage_monitor)
         self._run_cleanup_step(cleanup_errors, "unbind_session", lambda: self.ros_adapter.unbind_session(self))
         for _ in self._workers:
             try:
@@ -326,6 +353,7 @@ class SessionRuntime:
             self._end_reason = f"{reason}_failed"
             self._last_error = "; ".join(cleanup_errors)
         self.status_manager.update_metrics(self.metrics.metrics)
+        self._refresh_storage_metadata()
         if self._last_error is not None:
             self.status_manager.set_last_error(self._last_error)
         self.status_manager.set_idle(self._end_status)
@@ -383,31 +411,98 @@ class SessionRuntime:
                     break
             if not self._wait_until_sample_can_run():
                 break
-            self.metrics.sample_started()
-            sample = SampleContext(sample_id=str(event.main_frame.meta.source_timestamp_ns), cancel_event=threading.Event())
-            sample.put("main_frame", event.main_frame, "main_source")
-            self.logger.debug(
-                "sample start session_id=%s sample_id=%s queue_size=%s",
-                self.session_id,
-                sample.sample_id,
-                self.main_frame_queue.qsize(),
-            )
-            outcome = self._dag.run_sample(sample)
-            self._record_sample_warnings(sample)
-            if sample.metadata.get("save_result", {}).get("saved"):
-                self._append_sample_record(sample)
-                self.metrics.sample_saved()
-                self._check_saved_sample_limit()
-            self.metrics.sample_finished(outcome.status, outcome.reason)
-            self.status_manager.update_metrics(self.metrics.metrics)
-            self.logger.debug(
-                "sample finished session_id=%s sample_id=%s status=%s reason=%s saved=%s",
-                self.session_id,
-                sample.sample_id,
-                outcome.status.value,
-                outcome.reason,
-                bool(sample.metadata.get("save_result", {}).get("saved")),
-            )
+            self._check_storage()
+            with self._state_condition:
+                if self._completion_requested or self.cancel_event.is_set():
+                    break
+                self._inflight_samples += 1
+            try:
+                self._process_sample(event)
+            finally:
+                self._check_storage()
+                with self._state_condition:
+                    self._inflight_samples -= 1
+                    self._finish_storage_stop_locked()
+
+    def _process_sample(self, event: MainFrameEvent) -> None:
+        self.metrics.sample_started()
+        sample = SampleContext(sample_id=str(event.main_frame.meta.source_timestamp_ns), cancel_event=threading.Event())
+        sample.put("main_frame", event.main_frame, "main_source")
+        self.logger.debug(
+            "sample start session_id=%s sample_id=%s queue_size=%s",
+            self.session_id, sample.sample_id, self.main_frame_queue.qsize(),
+        )
+        outcome = self._dag.run_sample(sample)
+        self._record_sample_warnings(sample)
+        if sample.metadata.get("save_result", {}).get("saved"):
+            self._append_sample_record(sample)
+            self.metrics.sample_saved()
+            self._check_saved_sample_limit()
+        self.metrics.sample_finished(outcome.status, outcome.reason)
+        self.status_manager.update_metrics(self.metrics.metrics)
+        self.logger.debug(
+            "sample finished session_id=%s sample_id=%s status=%s reason=%s saved=%s",
+            self.session_id, sample.sample_id, outcome.status.value, outcome.reason,
+            bool(sample.metadata.get("save_result", {}).get("saved")),
+        )
+
+    def _publish_storage(self) -> None:
+        self.status_manager.update_storage(
+            self.storage_tracker.size_bytes if self.storage_tracker is not None else None,
+            self.app_config.disk_storage_limit_gb, self.app_config.disk_storage_need_gb,
+        )
+
+    def _refresh_storage_metadata(self) -> None:
+        if self.storage_tracker is not None:
+            for name in ("debug.log", "saved_samples.json", "session_summary.json"):
+                self.storage_tracker.refresh(self.session_root / name)
+            self.storage_tracker.refresh(self.app_config.output_root_dir / BACKGROUND_LOG_FILENAME)
+        self._publish_storage()
+
+    def _check_storage(self) -> None:
+        if self.storage_tracker is None or self._storage_stop.is_set():
+            return
+        self._publish_storage()
+        try:
+            self.storage_tracker.check()
+        except StorageError as exc:
+            with self._state_condition:
+                if not self._active or self.cancel_event.is_set() or self._storage_failure is not None:
+                    return
+                self._storage_failure = exc
+                self._last_error = str(exc)
+                self.status_manager.set_last_error(self._last_error)
+                self._completion_requested = True
+                self._accepting_frames = False
+                self._state_condition.notify_all()
+                self._finish_storage_stop_locked()
+
+    def _finish_storage_stop_locked(self) -> None:
+        if self._storage_failure is None or self._inflight_samples or self._storage_completion_sent or self.cancel_event.is_set():
+            return
+        self._storage_completion_sent = True
+        self._command_callback(ControlCommand(
+            kind="complete", session_id=self.session_id, reason=self._storage_failure.reason,
+            end_status=RecentSessionStatus.FAILED.value,
+        ))
+
+    def _storage_monitor_loop(self) -> None:
+        next_scan = time.monotonic() + STORAGE_RECONCILE_INTERVAL_SEC
+        while not self._storage_stop.is_set():
+            self.storage_tracker.refresh(self.session_root / "debug.log")
+            self.storage_tracker.refresh(self.app_config.output_root_dir / BACKGROUND_LOG_FILENAME)
+            if time.monotonic() >= next_scan:
+                self.storage_tracker.reconcile()
+                next_scan = time.monotonic() + STORAGE_RECONCILE_INTERVAL_SEC
+            if self._storage_stop.wait(STORAGE_LOG_INTERVAL_SEC):
+                break
+
+    def _stop_storage_monitor(self) -> None:
+        self._storage_stop.set()
+        if self._storage_thread is not None:
+            if self._storage_thread.is_alive():
+                self._storage_thread.join(timeout=self.app_config.runtime.stop_timeout_sec)
+            self._storage_thread = None
 
     def pause(self) -> None:
         with self._state_condition:

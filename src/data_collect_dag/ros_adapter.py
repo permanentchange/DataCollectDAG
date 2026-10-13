@@ -46,6 +46,7 @@ class RosAdapter:
         self._stop_callback: Optional[Callable[[], None]] = None
         self._pause_callback: Optional[Callable[[], None]] = None
         self._resume_callback: Optional[Callable[[], None]] = None
+        self._shutdown_callback: Optional[Callable[[], None]] = None
         self._status_thread: Optional[threading.Thread] = None
         self._status_stop = threading.Event()
         self._subscribers = []
@@ -65,12 +66,14 @@ class RosAdapter:
         stop_callback: Callable[[], None],
         pause_callback: Callable[[], None],
         resume_callback: Callable[[], None],
+        shutdown_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         self._status_callback = status_callback
         self._start_callback = start_callback
         self._stop_callback = stop_callback
         self._pause_callback = pause_callback
         self._resume_callback = resume_callback
+        self._shutdown_callback = shutdown_callback
 
     def bind_session(self, session: Any) -> None:
         self._session = session
@@ -288,7 +291,7 @@ class RosAdapter:
             self._logger.warning("ignoring invalid ROS control payload: expected JSON object")
             return
         command_name = command.get("command")
-        if command_name not in {"start", "stop", "pause", "resume"}:
+        if command_name not in {"start", "stop", "pause", "resume", "shutdown"}:
             self._logger.warning("ignoring invalid ROS control command=%r", command_name)
             return
         if command_name == "start":
@@ -311,6 +314,10 @@ class RosAdapter:
         if command_name == "resume":
             if self._resume_callback is not None:
                 self._resume_callback()
+            return
+        if command_name == "shutdown":
+            if self._shutdown_callback is not None:
+                self._shutdown_callback()
 
     def _handle_status_service(self, _request: Any):
         _Trigger, TriggerResponse = import_std_srvs_trigger()

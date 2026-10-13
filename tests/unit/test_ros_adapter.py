@@ -160,6 +160,7 @@ def test_control_topic_dispatches_json_commands(monkeypatch):
         stop_callback=lambda: calls.append(("stop", None)),
         pause_callback=lambda: calls.append(("pause", None)),
         resume_callback=lambda: calls.append(("resume", None)),
+        shutdown_callback=lambda: calls.append(("shutdown", None)),
     )
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_rospy", lambda: fake_rospy)
     monkeypatch.setattr("data_collect_dag.ros_adapter.import_std_msgs_string", lambda: _StringMsg)
@@ -171,12 +172,14 @@ def test_control_topic_dispatches_json_commands(monkeypatch):
     callback(_StringMsg('{"command":"pause"}'))
     callback(_StringMsg('{"command":"resume"}'))
     callback(_StringMsg('{"command":"stop","request_id":"abc"}'))
+    callback(_StringMsg('{"command":"shutdown"}'))
 
     assert calls == [
         ("start", "xtreme1_collect"),
         ("pause", None),
         ("resume", None),
         ("stop", None),
+        ("shutdown", None),
     ]
 
 
@@ -188,6 +191,7 @@ def test_control_topic_dispatches_json_commands(monkeypatch):
         "{}",
         '{"command":"unknown"}',
         '{"command":"Start","pipeline":"xtreme1_collect"}',
+        '{"command":"Shutdown"}',
         '{"command":"start"}',
         '{"command":"start","pipeline":""}',
     ],

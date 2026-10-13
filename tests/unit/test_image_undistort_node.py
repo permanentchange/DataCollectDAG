@@ -4,6 +4,7 @@ import pytest
 from data_collect_dag.models import ImageFrame, NodeConfig, NodeResult
 from data_collect_dag.nodes.image_undistort import ImageUndistortNode
 from data_collect_dag.sample_context import SampleContext
+from data_collect_dag.storage import StorageTracker, scan_files
 from tests.unit.conftest import make_meta
 
 
@@ -29,7 +30,11 @@ def _make_node(dummy_session):
     )
 
 
-def test_image_undistort_writes_corrected_frame_with_original_metadata(dummy_session):
+@pytest.mark.parametrize("track_storage", [False, True])
+def test_image_undistort_writes_corrected_frame_with_original_metadata(dummy_session, track_storage):
+    if track_storage:
+        dummy_session.storage_tracker = StorageTracker(dummy_session.app_config.output_root_dir, 1, lambda: None)
+        dummy_session.storage_tracker.reconcile()
     node = _make_node(dummy_session)
     node.setup()
     raw = np.dstack(
@@ -61,6 +66,8 @@ def test_image_undistort_writes_corrected_frame_with_original_metadata(dummy_ses
     assert (debug_root / "raw.jpg").exists()
     assert (debug_root / "undistorted.jpg").exists()
     assert (debug_root / "calibration.json").exists()
+    if track_storage:
+        assert dummy_session.storage_tracker.size_bytes == sum(scan_files(dummy_session.app_config.output_root_dir).values())
 
 
 def test_image_undistort_setup_rejects_missing_distortion_coefficients(dummy_session):

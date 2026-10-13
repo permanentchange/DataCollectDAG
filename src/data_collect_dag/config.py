@@ -24,11 +24,38 @@ class ConfigError(ValueError):
     pass
 
 
+def parse_output_config(raw: Any) -> Tuple[Path, Optional[float], Optional[float]]:
+    output = {} if raw is None else raw
+    if not isinstance(output, dict):
+        raise ConfigError("output must be a mapping")
+    values: List[Optional[float]] = []
+    for key in ("disk_storage_limit_GB", "disk_storage_need_GB"):
+        value = output.get(key)
+        if value is not None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ConfigError(f"output.{key} must be a finite non-negative number")
+            try:
+                value = float(value)
+            except OverflowError:
+                raise ConfigError(f"output.{key} must be a finite non-negative number")
+            if not math.isfinite(value) or value < 0:
+                raise ConfigError(f"output.{key} must be a finite non-negative number")
+        values.append(value or None)
+    return Path(output.get("root_dir", "output")).expanduser().resolve(), values[0], values[1]
+
+
+def load_output_config(path: Path) -> Tuple[Path, Optional[float], Optional[float]]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ConfigError("config root must be a mapping")
+    return parse_output_config(raw.get("output"))
+
+
 def load_app_config(path: Path) -> AppConfig:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ConfigError("config root must be a mapping")
-    output = raw.get("output") or {}
+    output_root, storage_limit, storage_need = parse_output_config(raw.get("output"))
     ros = raw.get("ros") or {}
     cache = raw.get("cache") or {}
     runtime = raw.get("runtime") or {}
@@ -48,7 +75,9 @@ def load_app_config(path: Path) -> AppConfig:
     _validate_runtime_config(runtime_config)
     return AppConfig(
         config_path=path.resolve(),
-        output_root_dir=Path(output.get("root_dir", "output")).expanduser().resolve(),
+        output_root_dir=output_root,
+        disk_storage_limit_gb=storage_limit,
+        disk_storage_need_gb=storage_need,
         ros_node_name=str(ros.get("node_name", "data_collect_dag")),
         control=_parse_control_config(ros.get("control") or {}),
         topics=topics,

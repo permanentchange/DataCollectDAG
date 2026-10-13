@@ -119,3 +119,11 @@ def test_shutdown_stops_control_loop_when_session_cleanup_fails():
 
     assert runtime._stop_event.is_set()
     assert runtime._control_stop_event.is_set()
+
+
+def test_ros_shutdown_callback_only_enqueues_shutdown():
+    runtime = _make_runtime(_SuccessfulSessionManager())
+    runtime._handle_shutdown_command()
+    assert not runtime._stop_event.is_set()
+    command = runtime.command_queue.get(timeout=0.1)
+    assert command.kind == "shutdown" and command.reason == "external_shutdown"

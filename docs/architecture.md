@@ -16,6 +16,7 @@ CLI / python -m data_collect_dag
 ```
 
 - `AppRuntime` 初始化时加载 YAML 和标定 JSON；`calibration.path` 必须提供且文件可读。`AppRuntime.run` 等待 ROS master、初始化 ROS adapter，然后通过控制队列启动 CLI 指定的 pipeline。
+- `--background` 在创建运行时之前用当前 Python 启动独立进程并立即返回 PID；子进程继承环境和工作目录，终端关闭后继续运行，stdout/stderr 追加到 `<output.root_dir>/background.log`。它与 `--clean` 互斥；启动失败详情见日志。ROS `shutdown` 与 SIGINT/SIGTERM 都通过控制队列收尾并退出整个程序；`stop` 只停止 session。
 - `RosAdapter` 订阅配置中 **所有** `ros.topics`；只有绑定活动 session 时，帧才进入其缓存。消息转换、接入和状态发布由 ROS 适配层承担。
 - `SessionManager` 同时只维护一个 session；新的 `start` 会先结束原 session。`pause` 停止接收新帧并阻止新样本开始处理；`resume` 恢复。
 - `SessionRuntime` 用 `main_source` 的消息触发 `MainFrameEvent`。主帧排队后可以延时处理；队列满时尝试丢弃最旧主帧事件。`sample_workers` 消费主帧，`node_workers` 是 DAG 节点线程池大小。
@@ -28,6 +29,8 @@ CLI / python -m data_collect_dag
 | 字段 | 行为 |
 | --- | --- |
 | `output.root_dir` | 会话输出目录，默认 `output` |
+| `output.disk_storage_limit_GB` | root_dir 内普通文件总大小上限；达到上限拒绝启动，运行中达到上限则停止新样本 |
+| `output.disk_storage_need_GB` | 每次新任务开始时要求所在文件系统的最小空闲空间；暂停恢复不复查 |
 | `calibration.path` | 启动运行时必须存在的标定 JSON 文件路径 |
 | `ros.node_name` | ROS 节点名，默认 `data_collect_dag` |
 | `ros.control` | 可选 `control_topic`、`status_topic`、`start_service`、`stop_service`、`status_service` |
@@ -48,6 +51,12 @@ CLI / python -m data_collect_dag
 | `stop_timeout_sec` | `5.0` |
 
 `sample_workers`、`node_workers`、`main_frame_queue_size` 必须大于等于 1，`stop_timeout_sec` 必须大于 0。
+
+两个容量参数使用十进制 GB（1,000,000,000 字节），接受有限的非负数；省略、`null` 或 `0` 关闭对应检查。比较使用未舍入的容量：目录大小大于等于 limit 拒绝启动，空闲空间小于 need 拒绝启动。检查在创建会话目录之前执行；root_dir 不存在时视为零大小，在最近存在的父目录查询空闲空间。
+
+启用 limit 后，启动时扫描 root_dir，统计所有普通文件的逻辑大小（包括其他文件、诊断和日志），不跟随符号链接。写入增量与每帧检查使用容量缓存；会话 `debug.log` 和根目录 `background.log` 每秒更新，后台每 30 秒扫描校准外部改动。超限或容量查询失败后停止接收新帧及启动排队样本，等待在途样本结束，再经控制队列结束会话。允许在途数据及收尾文件造成少量超额；此限制不是磁盘配额。status 查询和 ROS 回调不扫描目录。
+
+`--clean DAY` 仅加载输出配置并清理后退出，不启动运行时。只删除 root_dir 的直接普通会话子目录，完整格式为 `YYYYMMDD_HHMMSS_八位十六进制后缀`，按目录名中的有效本地日期判断。DAY=0 删除全部会话目录；DAY=N>0 删除早于今天减去 N−1 天的目录，未来日期保留。其他目录、文件及符号链接保留；root_dir 不存在时成功退出，删除失败返回非零。清理应在采集停止时执行。
 
 最小的结构示例（需要事先准备标定文件和对应 ROS topic）：
 

@@ -32,7 +32,8 @@ ros:
 | 启动/替换 | `{"command":"start","pipeline":"fps"}` | 启动配置中存在的 pipeline；若已有 session，先结束旧 session |
 | 暂停 | `{"command":"pause"}` | 暂停接收新帧及新样本执行 |
 | 恢复 | `{"command":"resume"}` | 恢复暂停的 session |
-| 停止 | `{"command":"stop"}` | 停止活动 session |
+| 停止 | `{"command":"stop"}` | 停止活动 session，程序继续运行，可再次 start |
+| 退出 | `{"command":"shutdown"}` | 停止活动 session、保存摘要、释放资源并退出整个程序 |
 
 `command` 必须为小写；`start` 的 `pipeline` 必须是非空字符串。非法 JSON、未知命令、缺失 pipeline 会被忽略并记录 warning，不会直接修改 `last_error`。合法命令执行失败时，错误信息写入 status 的 `last_error`。
 
@@ -45,9 +46,10 @@ rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"sta
 rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"pause\"}'"
 rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"resume\"}'"
 rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"stop\"}'"
+rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"shutdown\"}'"
 ```
 
-CLI 启动后也会自动提交一次 `start`。它不会因某次 start 或节点初始化失败而自动退出；可以检查状态并发送新的 `start`。收到 `SIGINT`/`SIGTERM` 时，应用执行停止与清理并退出。
+CLI 启动后也会自动提交一次 `start`。它不会因某次 start 或节点初始化失败而自动退出；可以检查状态并发送新的 `start`。收到 `SIGINT`/`SIGTERM` 或 ROS `shutdown` 时，应用通过控制队列执行停止与清理并退出；ROS shutdown 的会话摘要 `end_reason` 为 `external_shutdown`。shutdown 不需要 pipeline 参数，对前台、`--background` 后台、暂停或无活动 session 的程序均有效。退出后停止发布 status。
 
 ## 状态消息
 
@@ -67,6 +69,9 @@ JSON 示例（省略部分空计数项的含义与空对象相同）：
   "current_pipeline_name": "fps",
   "start_time": "2026-10-12T09:00:00",
   "disk_free_gb": 120.5,
+  "output_size_gb": 25.3,
+  "disk_storage_limit_gb": 100.0,
+  "disk_storage_need_gb": 100.0,
   "last_error": null,
   "warnings": 0,
   "received_messages": {"front_ext_camera": 100},
@@ -89,6 +94,8 @@ JSON 示例（省略部分空计数项的含义与空对象相同）：
 | `recent_session_status` | 最近结束 session 的结果：`STOPPED`、`COMPLETED`、`FAILED` 或 `null` |
 | `current_session_id`、`current_pipeline_name`、`start_time` | 活动 session 信息；`IDLE` 时为 `null` |
 | `disk_free_gb` | 输出目录所在文件系统的可用空间，查询失败时为 `null` |
+| `output_size_gb` | 输出目录普通文件总大小的缓存值；未启用限额统计或查询失败时为 `null` |
+| `disk_storage_limit_gb`、`disk_storage_need_gb` | 配置的目录容量上限和启动空闲空间门槛；关闭时为 `null` |
 | `last_error` | 最近一次控制或运行错误 |
 | `warnings` | 警告计数 |
 | `received_messages` | 每个 `topic_key` 的接收数量 |
@@ -97,6 +104,10 @@ JSON 示例（省略部分空计数项的含义与空对象相同）：
 | `drop_reasons`、`skip_reasons`、`fail_reasons` | 按原因归类的计数 |
 
 `RUNNING`、`PAUSED` 是活动状态；`STOPPED`、`COMPLETED`、`FAILED` 属于最近 session 的最终结果。状态切换至 `IDLE` 后，当前 session 的三个字段被清空，计数仍保留到下一次成功启动。不能单凭消息发布成功判断命令已执行，应等待状态变化并检查 `last_error`。
+
+容量字段使用十进制 GB，展示值保留两位小数，限额比较使用未舍入的字节数。启动时目录达到上限或空闲空间不足，将保持 `IDLE` 并报告 `FAILED`，不创建会话目录。`last_error` 以 `storage_limit_reached`、`insufficient_disk_space` 或 `storage_check_failed` 标识原因，并包含路径和容量或查询错误。
+
+运行中达到目录容量上限或检查失败后，停止新样本并等待在途样本完成，随后进入 `IDLE` / `FAILED`；摘要 `end_reason` 为 `storage_limit_reached` 或 `storage_check_failed`。在途数据及收尾文件可能造成少量超额。ROS 控制和 status 发布继续工作，释放空间后可显式发送 `start` 重新检查；不会自动恢复。`disk_storage_need_GB` 仅在每次新任务开始时检查，运行中和暂停恢复不作为停止条件。
 
 ## 启动前置检查与错误边界
 

@@ -232,6 +232,8 @@ class AppConfig:
     runtime: RuntimeConfig
     pipelines: Dict[str, PipelineDefinition]
     calibration_path: Optional[Path] = None
+    disk_storage_limit_gb: Optional[float] = None
+    disk_storage_need_gb: Optional[float] = None
 
 
 @dataclass
@@ -296,6 +298,9 @@ class StatusSnapshot:
     current_pipeline_name: Optional[str] = None
     start_time: Optional[str] = None
     disk_free_gb: Optional[float] = None
+    output_size_gb: Optional[float] = None
+    disk_storage_limit_gb: Optional[float] = None
+    disk_storage_need_gb: Optional[float] = None
     last_error: Optional[str] = None
     warnings: int = 0
     received_messages: Dict[str, int] = field(default_factory=dict)
@@ -316,6 +321,9 @@ class StatusSnapshot:
             "current_pipeline_name": self.current_pipeline_name,
             "start_time": self.start_time,
             "disk_free_gb": self.disk_free_gb,
+            "output_size_gb": self.output_size_gb,
+            "disk_storage_limit_gb": self.disk_storage_limit_gb,
+            "disk_storage_need_gb": self.disk_storage_need_gb,
             "last_error": self.last_error,
             "warnings": self.warnings,
             "received_messages": self.received_messages,

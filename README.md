@@ -72,6 +72,37 @@ data_collect_dag --config demo/cfg.yaml --pipeline fps_with_yolo
 
 The CLI also supports `python -m data_collect_dag --config ... --pipeline ...`. The `--config` argument is required; `--pipeline` defaults to `init`.
 
+To run in the background and keep running after closing the terminal:
+
+```bash
+data_collect_dag --config demo/cfg.yaml --background
+tail -f ~/DATA_COLLECT/background.log
+```
+
+`--background` immediately prints the process PID and log path, then returns. It inherits the current Python environment, ROS environment and working directory. stdout/stderr append to `<output.root_dir>/background.log`, which counts toward the storage limit. The PID confirms process creation; check the log and status for successful collection. Background mode and `--clean` are mutually exclusive. There is no automatic restart or startup on boot.
+
+To stop the entire program, in either foreground or background mode:
+
+```bash
+rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"shutdown\"}'"
+# Alternatively, using the PID printed by --background:
+kill -TERM PID
+```
+
+Both perform session cleanup and save the summary before exiting. Foreground Ctrl+C also remains supported. The ROS `stop` command ends the collection session and keeps the program available for another `start`.
+
+To clean expired session directories while collection is stopped:
+
+```bash
+data_collect_dag --config demo/cfg.yaml --clean 2
+```
+
+`--clean` only cleans and exits; it needs no ROS master, calibration or pipeline. `0` deletes all session directories, `1` keeps today, and `2` keeps today and yesterday. Dates come from session directory names in local time, not modification times. Other files/directories and symbolic links are preserved; future session dates are preserved when the value is greater than zero. An accompanying `--pipeline` is ignored.
+
+Under `output`, `disk_storage_limit_GB` limits the total ordinary file size in `root_dir`; `disk_storage_need_GB` requires minimum free space on its filesystem at each task start. Both use decimal GB (1,000,000,000 bytes); omit them or use `null`/`0` to disable. Values must be finite non-negative numbers. The demo sets both to `100`.
+
+Before creating a session, collection is refused when output size is at least the limit or free space is below the requirement. During collection, file writes update cached sizes and each frame checks the limit; logs are refreshed every second and a background directory scan every 30 seconds detects external changes. At the limit, new frames stop and in-flight frames finish, so output may exceed the limit by those frames and final metadata/logs. The session ends as `FAILED` with the reason in status and its summary; ROS control remains available. Free space is only an admission check, not a continuous requirement. After freeing space, send a new start command to retry.
+
 Available sample pipelines:
 
 | Configuration | Pipeline | Inference required |
@@ -92,7 +123,7 @@ Relative values in `output.root_dir`, `calibration.path` and YOLO `model_path` a
 
 ## ROS control and results
 
-The demo configurations use `/data_collect/control` and `/data_collect/status`, both with `std_msgs/String` messages containing JSON. The control commands are `start`, `pause`, `resume` and `stop`. Optional `std_srvs/Trigger` services can also be configured. See [ROS control interface](docs/ros_external_system_architecture.md).
+The demo configurations use `/data_collect/control` and `/data_collect/status`, both with `std_msgs/String` messages containing JSON. The control commands are `start`, `pause`, `resume`, `stop` and `shutdown`. Optional `std_srvs/Trigger` services can also be configured. See [ROS control interface](docs/ros_external_system_architecture.md).
 
 Results are written under `<output.root_dir>/<session_id>/`:
 

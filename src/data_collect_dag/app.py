@@ -39,6 +39,7 @@ class AppRuntime:
         if self.app_config.calibration_path is None:
             raise ValueError("calibration.path is required")
         self.status_manager = StatusManager(disk_usage_path=self.app_config.output_root_dir)
+        self.status_manager.update_storage(None, self.app_config.disk_storage_limit_gb, self.app_config.disk_storage_need_gb)
         self.ros_adapter = RosAdapter(self.app_config.topics, self.app_config.ros_node_name, self.app_config.control)
         self.calibration = load_calibration(self.app_config.calibration_path)
         self.command_queue = ControlCommandQueue()
@@ -58,6 +59,7 @@ class AppRuntime:
             stop_callback=self._handle_stop_command,
             pause_callback=self._handle_pause_command,
             resume_callback=self._handle_resume_command,
+            shutdown_callback=self._handle_shutdown_command,
         )
 
     def run(self) -> int:
@@ -88,6 +90,10 @@ class AppRuntime:
         self.logger.info("received stop command")
         self._submit_command(ControlCommand(kind="stop", reason="external_stop", end_status=RecentSessionStatus.STOPPED.value))
 
+    def _handle_shutdown_command(self) -> None:
+        self.logger.info("received shutdown command")
+        self._submit_command(ControlCommand(kind="shutdown", reason="external_shutdown"))
+
     def _handle_pause_command(self) -> None:
         self.logger.info("received pause command")
         self._submit_command(ControlCommand(kind="pause"))
@@ -113,8 +119,8 @@ class AppRuntime:
 
     def _dispatch_command(self, command: ControlCommand) -> None:
         if command.kind == "start":
-            self.session_manager.start(command.pipeline_name or self.pipeline_name)
             self.status_manager.set_last_error(None)
+            self.session_manager.start(command.pipeline_name or self.pipeline_name)
             return
         if command.kind == "stop":
             self.session_manager.stop(
@@ -152,4 +158,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Data collection DAG demo runtime")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--pipeline", default='init')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--clean", type=_nonnegative_days, metavar="DAY", help="delete expired session directories and exit (0: all, 1: keep today)")
+    mode.add_argument("--background", action="store_true", help="run in the background; print PID and log path, then exit")
     return parser
+
+
+def _nonnegative_days(value: str) -> int:
+    try:
+        days = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("--clean must be a non-negative integer")
+    if days < 0:
+        raise argparse.ArgumentTypeError("--clean must be a non-negative integer")
+    return days

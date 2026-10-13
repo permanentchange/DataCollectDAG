@@ -65,6 +65,12 @@ class StatusManager:
         with self._lock:
             self._snapshot.last_error = message
 
+    def update_storage(self, size_bytes: Optional[int], limit_gb: Optional[float], need_gb: Optional[float]) -> None:
+        with self._lock:
+            self._snapshot.output_size_gb = round(size_bytes / 1_000_000_000, 2) if size_bytes is not None else None
+            self._snapshot.disk_storage_limit_gb = limit_gb
+            self._snapshot.disk_storage_need_gb = need_gb
+
     def snapshot(self) -> StatusSnapshot:
         with self._lock:
             cloned = StatusSnapshot()

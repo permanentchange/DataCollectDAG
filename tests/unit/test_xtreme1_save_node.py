@@ -10,6 +10,7 @@ from PIL import Image
 from data_collect_dag.models import NodeConfig, NodeResult, PointCloudFrame, TopicConfig
 from data_collect_dag.nodes.xtreme1 import Xtreme1SaveNode, _build_camera_config
 from data_collect_dag.sample_context import SampleContext
+from data_collect_dag.storage import StorageTracker, scan_files
 from tests.unit.conftest import make_meta
 
 
@@ -34,7 +35,11 @@ def _node(dummy_session, *, inputs, cameras, dataset_name="collect_demo"):
     )
 
 
-def test_xtreme1_save_node_uses_ordered_generic_camera_bindings(dummy_session, image_frame):
+@pytest.mark.parametrize("track_storage", [False, True])
+def test_xtreme1_save_node_uses_ordered_generic_camera_bindings(dummy_session, image_frame, track_storage):
+    if track_storage:
+        dummy_session.storage_tracker = StorageTracker(dummy_session.app_config.output_root_dir, 1, lambda: None)
+        dummy_session.storage_tracker.reconcile()
     sample = SampleContext(sample_id="s")
     corrected = image_frame.replace(image_bgr=np.full_like(image_frame.image_bgr, [200, 0, 0]))
     later_image = replace(image_frame, meta=make_meta("front_fisheye_camera", "image", 2_000_000_000))
@@ -82,6 +87,12 @@ def test_xtreme1_save_node_uses_ordered_generic_camera_bindings(dummy_session, i
     payload = json.loads(Path(save_result["camera_config"]).read_text(encoding="utf-8"))
     assert len(payload["items"]) == 5
     assert payload["items"][0]["camera_internal"]["fx"] == 500.0
+    if track_storage:
+        assert dummy_session.storage_tracker.size_bytes == sum(scan_files(dummy_session.app_config.output_root_dir).values())
+        second_node = _node(dummy_session, inputs=inputs, cameras=cameras, dataset_name="second_dataset")
+        second_node.setup()
+        assert second_node.run(sample).status == NodeResult.OK
+        assert dummy_session.storage_tracker.size_bytes == sum(scan_files(dummy_session.app_config.output_root_dir).values())
 
 
 def test_xtreme1_save_node_supports_topic_keys_not_known_by_node(dummy_session, image_frame):

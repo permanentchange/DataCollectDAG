@@ -135,8 +135,9 @@ class ImageUndistortNode(BaseNode):
         image_size: Tuple[int, int],
     ) -> None:
         root = self.session.session_root / "diagnostics" / "undistort" / sample_id / self._source
-        save_jpg(root / "raw.jpg", raw_image)
-        save_jpg(root / "undistorted.jpg", undistorted)
+        storage_tracker = getattr(self.session, "storage_tracker", None)
+        save_jpg(root / "raw.jpg", raw_image, storage_tracker=storage_tracker)
+        save_jpg(root / "undistorted.jpg", undistorted, storage_tracker=storage_tracker)
         write_json(
             root / "calibration.json",
             {
@@ -147,6 +148,7 @@ class ImageUndistortNode(BaseNode):
                 "dist_coeffs": self._dist_coeffs.reshape(-1).tolist(),
                 "undistorted_camera_matrix": corrected_matrix.tolist(),
             },
+            storage_tracker=storage_tracker,
         )
 
 

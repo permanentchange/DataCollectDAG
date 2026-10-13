@@ -57,13 +57,14 @@ class Xtreme1SaveNode(BaseNode):
             )
             return NodeOutcome(status=NodeResult.FAIL_SAMPLE, reason=f"{self.node_id}_pointcloud_not_in_base")
         stem = str(int(camera_images[0].meta.source_timestamp_ns))
+        storage_tracker = getattr(self.session, "storage_tracker", None)
         saved_images: List[str] = []
         saved_camera_topics: List[str] = []
         camera_configs: List[Dict[str, Any]] = []
         for index, ((_, topic_key, ros_topic), image) in enumerate(zip(self._cameras, camera_images)):
             image_path = self._save_root / f"camera_image_{index}" / f"{stem}.jpg"
             assert image.image_bgr is not None
-            save_jpg(image_path, image.image_bgr)
+            save_jpg(image_path, image.image_bgr, storage_tracker=storage_tracker)
             saved_images.append(str(image_path))
             saved_camera_topics.append(topic_key)
             camera_params = dict(self.session.calibration["images"][ros_topic])
@@ -79,12 +80,13 @@ class Xtreme1SaveNode(BaseNode):
                 pointcloud.points_xyz,
                 intensities=pointcloud.intensities,
                 has_intensity=pointcloud.has_intensity,
+                storage_tracker=storage_tracker,
             )
         except ValueError as exc:
             self.logger.debug("save fail sample_id=%s node_id=%s invalid_intensity=%s", sample.sample_id, self.node_id, exc)
             return NodeOutcome(status=NodeResult.FAIL_SAMPLE, reason=f"{self.node_id}_invalid_intensity")
         config_path = self._save_root / "camera_config" / f"{stem}.json"
-        write_json(config_path, {"items": camera_configs})
+        write_json(config_path, {"items": camera_configs}, storage_tracker=storage_tracker)
         sample.metadata["save_result"] = {
             "saved": True,
             "dataset_name": self._dataset_name,
