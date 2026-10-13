@@ -4,7 +4,7 @@ DataCollectDAG 在 ROS1 Noetic 中作为一个 ROS node 运行。外部系统通
 
 ## 接口配置
 
-示例 `demo/cfg.yaml`、`demo/xtreme1_demo.yaml` 使用：
+`demo/cfg.yaml` 及 `--init-demo` 导出的配置使用：
 
 ```yaml
 ros:
@@ -49,7 +49,9 @@ rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"sto
 rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"shutdown\"}'"
 ```
 
-CLI 启动后也会自动提交一次 `start`。它不会因某次 start 或节点初始化失败而自动退出；可以检查状态并发送新的 `start`。收到 `SIGINT`/`SIGTERM` 或 ROS `shutdown` 时，应用通过控制队列执行停止与清理并退出；ROS shutdown 的会话摘要 `end_reason` 为 `external_shutdown`。shutdown 不需要 pipeline 参数，对前台、`--background` 后台、暂停或无活动 session 的程序均有效。退出后停止发布 status。
+采集 CLI 在 ROS adapter 启动后自动提交一次 `start`，默认 pipeline 为 `init`。它不会因某次 start 或节点初始化失败而自动退出；可以检查状态并发送新的 `start`。收到 `SIGINT`/`SIGTERM` 或 ROS `shutdown` 时，应用通过控制队列执行停止与清理并退出；正常收尾时，ROS shutdown 的摘要 `end_reason` 为 `external_shutdown`，信号退出为 `signal_<信号编号>`，最终状态为 `STOPPED`。shutdown 不需要 pipeline 参数，对前台、`--background` 后台、暂停或无活动 session 的程序均有效。退出后停止发布 status。`--init-demo` 和 `--clean` 不创建这些 ROS 接口。
+
+`pause` / `resume` / `stop` 在没有活动 session 时不启动采集。暂停不会强制中断已经执行的节点；`stop` 或 `shutdown` 会请求取消并执行收尾。节点线程池退出仍等待已提交任务，`runtime.stop_timeout_sec` 不是整个退出流程的总时限；收尾失败会报告 `FAILED` 和具体错误。
 
 ## 状态消息
 
@@ -65,9 +67,9 @@ JSON 示例（省略部分空计数项的含义与空对象相同）：
 {
   "tool_state": "RUNNING",
   "recent_session_status": null,
-  "current_session_id": "session-id",
+  "current_session_id": "20261013_090000_abcdef12",
   "current_pipeline_name": "fps",
-  "start_time": "2026-10-12T09:00:00",
+  "start_time": "2026-10-13T09:00:00.123456789",
   "disk_free_gb": 120.5,
   "output_size_gb": 25.3,
   "disk_storage_limit_gb": 100.0,
@@ -103,9 +105,9 @@ JSON 示例（省略部分空计数项的含义与空对象相同）：
 | `samples_saved`、`samples_skipped`、`samples_failed`、`samples_canceled` | 样本计数 |
 | `drop_reasons`、`skip_reasons`、`fail_reasons` | 按原因归类的计数 |
 
-`RUNNING`、`PAUSED` 是活动状态；`STOPPED`、`COMPLETED`、`FAILED` 属于最近 session 的最终结果。状态切换至 `IDLE` 后，当前 session 的三个字段被清空，计数仍保留到下一次成功启动。不能单凭消息发布成功判断命令已执行，应等待状态变化并检查 `last_error`。
+`RUNNING`、`PAUSED` 是活动状态；`STOPPED`、`COMPLETED`、`FAILED` 属于最近 session 的最终结果。状态切换至 `IDLE` 后，当前 session 的三个字段被清空，计数仍保留到下一次成功启动。成功启动重置计数和 `last_error`，但 `recent_session_status` 保留最近结束结果；不能据此字段单独判断当前是否运行。`start_time` 使用本机时间。状态 topic 会向新订阅者发送最近一条 latched 消息；不能单凭发布命令成功或一条缓存状态判断命令已执行，应等待活动状态/session id 变化并检查 `last_error`。
 
-容量字段使用十进制 GB，展示值保留两位小数，限额比较使用未舍入的字节数。启动时目录达到上限或空闲空间不足，将保持 `IDLE` 并报告 `FAILED`，不创建会话目录。`last_error` 以 `storage_limit_reached`、`insufficient_disk_space` 或 `storage_check_failed` 标识原因，并包含路径和容量或查询错误。
+容量字段使用十进制 GB；`disk_free_gb`、`output_size_gb` 展示值保留两位小数，配置门槛保留配置数值，限额比较使用未舍入的字节数。启动时目录达到上限或空闲空间不足，将保持 `IDLE` 并报告 `FAILED`，不创建会话目录或该会话的摘要。`last_error` 以 `storage_limit_reached`、`insufficient_disk_space` 或 `storage_check_failed` 标识原因，并包含路径和容量或查询错误。
 
 运行中达到目录容量上限或检查失败后，停止新样本并等待在途样本完成，随后进入 `IDLE` / `FAILED`；摘要 `end_reason` 为 `storage_limit_reached` 或 `storage_check_failed`。在途数据及收尾文件可能造成少量超额。ROS 控制和 status 发布继续工作，释放空间后可显式发送 `start` 重新检查；不会自动恢复。`disk_storage_need_GB` 仅在每次新任务开始时检查，运行中和暂停恢复不作为停止条件。
 

@@ -4,11 +4,13 @@ DataCollectDAG is a Python 3.8 / ROS1 Noetic application for collecting sensor d
 
 ## Requirements
 
-- Ubuntu with ROS1 Noetic, a running ROS master, and Python 3.8 (`>=3.8,<3.9`).
-- ROS message packages referenced by the YAML, including any custom packages such as `bdstar` and `igv_msgs`. Build them in a catkin workspace and source its setup script.
+- Python 3.8 (`>=3.8,<3.9`), and Git for installation from a Git URL.
+- For acquisition: Ubuntu with ROS1 Noetic, a running ROS master, and ROS message packages referenced by the YAML, including custom packages such as `bdstar` and `igv_msgs`. Build them in a catkin workspace and source its setup script.
 - The calibration JSON and live ROS topics required by the selected pipeline. A ROS bag may be used for playback but is **not included** in this repository.
 
 The base Python package installs NumPy, PyYAML, Pillow, OpenCV and rospkg. It does **not** depend on Ultralytics, PyTorch, Torchvision, ONNX or ONNX Runtime. Inference libraries are imported only when an inference node is initialized.
+
+Template export and cleanup need no ROS master. The Python package does not supply ROS installations, custom message packages, model weights or ROS bags.
 
 ## Install
 
@@ -25,10 +27,12 @@ python -m pip install -e .
 data_collect_dag --help
 ```
 
-Alternatively, install the base package directly from GitHub:
+Alternatively, install the base package directly from GitHub or Gitee:
 
 ```bash
-python3.8 -m pip install 'git+https://github.com/permanentchange/DataCollectDAG.git'
+python3.8 -m pip install --upgrade 'git+https://github.com/permanentchange/DataCollectDAG.git@main'
+# Alternative source:
+# python3.8 -m pip install --upgrade 'git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
 data_collect_dag --init-demo ~/dcd-demo --car-id sa4
 data_collect_dag --config ~/dcd-demo/cfg.yaml --pipeline fps_undist
 ```
@@ -53,8 +57,6 @@ data_collect_dag --init-demo ~/dcd-demo --force
 
 `--force` replaces only exported template filenames (including any edits you made to them); unrelated files and existing model weights are preserved. Combine it with `--car-id` to switch the configuration's car without replacing or removing other cars' calibration files. Export refuses directory symlinks that lead outside the destination. Package upgrades never change previously exported configurations. Editable installations export the checkout's current demo files; ordinary installations export templates shipped with that package version.
 
-The old `calibration/saN_cali.json` and `calibration/cali.json` paths have been replaced by `calibration/saN/cali.json`. Update external YAML references or export into a new directory. Re-exporting with `--force` updates the configuration but does not delete old-layout files from an existing directory.
-
 ### Optional inference and tools
 
 In a checkout, install only the extras you need:
@@ -71,7 +73,7 @@ In a checkout, install only the extras you need:
 ```bash
 python -m pip install -e '.[yolo]'
 # Or, for a remote installation:
-python -m pip install 'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git'
+python3.8 -m pip install --upgrade 'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git@main'
 ```
 
 `onnx-cpu` and `onnx-gpu` are alternative environments; do not install both ONNX Runtime distributions together. The project does **not** implement an independent ONNX DAG node: YOLO inference, including an ONNX model loaded through Ultralytics, uses the `yolo_gate` node.
@@ -95,14 +97,22 @@ data_collect_dag --config demo/cfg.yaml --pipeline fps_undist
 data_collect_dag --config demo/cfg.yaml --pipeline fps_with_yolo
 ```
 
-The CLI also supports `python -m data_collect_dag --config ... --pipeline ...`. Choose either `--config` to run/clean or `--init-demo DIR [--car-id CAR_ID]` to export; `--pipeline` defaults to `init`. Export cannot be combined with `--config`, `--clean` or `--background`; `--force` and `--car-id` are only valid for export.
+The CLI also supports `python3.8 -m data_collect_dag` with the same arguments:
+
+```text
+data_collect_dag --config CONFIG [--pipeline PIPELINE] [--background]
+data_collect_dag --config CONFIG --clean DAY
+data_collect_dag --init-demo DIR [--car-id CAR_ID] [--force]
+```
+
+`--pipeline` defaults to `init`. Export cannot be combined with `--config`, `--clean` or `--background`; `--force` and `--car-id` are only valid for export.
 
 `data_collect_dag --help` lists collection, cleanup and export as separate command forms. Collection (including `--background`) and cleanup require a YAML file via `--config`; export does not. For example, `data_collect_dag --clean 1` reports `--clean requires --config CONFIG to determine output.root_dir`. No configuration or cleanup directory is selected automatically.
 
 To run in the background and keep running after closing the terminal:
 
 ```bash
-data_collect_dag --config demo/cfg.yaml --background
+data_collect_dag --config demo/cfg.yaml --pipeline fps_undist --background
 tail -f ~/DATA_COLLECT/background.log
 ```
 
@@ -116,7 +126,7 @@ rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"shu
 kill -TERM PID
 ```
 
-Both perform session cleanup and save the summary before exiting. Foreground Ctrl+C also remains supported. The ROS `stop` command ends the collection session and keeps the program available for another `start`.
+These request cleanup and summary writing for an active session before exiting. Foreground Ctrl+C also remains supported. The ROS `stop` command ends the collection session and keeps the program available for another `start`.
 
 To clean expired session directories while collection is stopped:
 
@@ -132,10 +142,15 @@ Before creating a session, collection is refused when output size is at least th
 
 Available sample pipelines:
 
-| Configuration | Pipeline | Inference required |
+| Pipeline in `demo/cfg.yaml` | Behavior | Inference required |
 | --- | --- | --- |
-| `demo/cfg.yaml` | `init`, `fps`, `fps_undist`, `compare_motion` | No |
-| `demo/cfg.yaml` | `fps_with_yolo` | YOLO |
+| `init` | Topic precheck and synchronization; two-second active session, no save node | No |
+| `fps` | 1 FPS collection with image undistortion and point-cloud motion compensation | No |
+| `fps_undist` | Same FPS/synchronization/point-cloud processing, images without undistortion | No |
+| `fps_with_yolo` | YOLO-filtered FPS collection with undistortion | YOLO |
+| `compare_motion` | Motion-compensated and uncompensated point clouds in separate datasets | No |
+
+Collection pipelines have a 6,000-second active-duration limit in the demo. A completed session leaves the program available for further ROS commands. All configured `ros.topics` must have resolvable message types, including topics not used by a particular pipeline.
 
 The checkout's demo YAML references `demo/calibration/sa4/cali.json`. Its YOLO pipeline references `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself (or put it in `<export-dir>/models/` for an exported configuration):
 
@@ -150,7 +165,15 @@ Relative values in `output.root_dir`, `calibration.path` and YOLO `model_path` a
 
 `fps_undist` saves original images without undistortion, encoded as JPEG; its FPS control, synchronization and lidar processing match `fps`. Each camera entry in `camera_config/<timestamp>.json` includes the source `dist_model` and `dist_coeffs`, with intrinsics scaled to the saved image resolution. Existing pipelines keep their camera JSON format.
 
-Camera calibration entries now require `"dist_model": "equidistant"` and four finite numeric `dist_coeffs` in OpenCV fisheye order `[k1, k2, k3, k4]`. This is a breaking calibration-format change: replace `"is_fisheye": true` with the new field in external calibration files. Legacy `is_fisheye`, missing fields and other models are rejected. The repository's calibration files and conversion tool use the new field; only the existing equidistant algorithm is supported.
+Camera calibration entries require `"dist_model": "equidistant"` and four finite numeric `dist_coeffs` in OpenCV fisheye order `[k1, k2, k3, k4]`. Missing/invalid parameters and other models are rejected. Vehicle calibrations use `demo/calibration/<car-id>/cali.json`.
+
+Generate a calibration from your external vehicle source directory in a checkout:
+
+```bash
+python3.8 tools/cali_parser.py /path/to/argus/SA14 -o demo/calibration/sa14/cali.json
+```
+
+The tool creates output parent directories. Without `-o`, it writes `cali.json` inside the input vehicle directory. The input calibration sources are external resources; see [calibration and output formats](docs/architecture.md#4-数据与文件).
 
 ## ROS control and results
 
@@ -173,4 +196,4 @@ python -m pytest tests/unit -q
 python -m pytest tests/functional -q
 ```
 
-The Python tests mock ROS interactions where needed; actual acquisition still requires a live ROS environment. The repository's base-install CI also verifies that FPS DAG construction does not import inference packages.
+The Python tests mock ROS interactions where needed; actual acquisition still requires a live ROS environment. Base-install tests verify that FPS DAG construction does not import inference packages. Packaging tests verify offline export from wheels, source distributions and editable installs. See [repository guidelines](AGENTS.md) for development conventions.

@@ -121,4 +121,4 @@ PY
         ;;
 esac
 
-echo "Installed. Example models and configs remain separate from the package."
+echo "Installed. Export bundled configs with: data_collect_dag --init-demo DIR [--car-id CAR_ID]. Supply model weights separately."
