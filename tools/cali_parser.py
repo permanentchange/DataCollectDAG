@@ -83,7 +83,7 @@ def parse_camera_yaml(yaml_path: Path) -> Dict[str, Dict[str, Any]]:
             "scale_xy": [1.0, 1.0],
             "shift_xy": [0.0, 0.0],
             "base2camera": read_matrix(fs, "base2camera", (4, 4)),
-            "is_fisheye": True,
+            "dist_model": "equidistant",
         }
         return {key: camera_data}
     finally:

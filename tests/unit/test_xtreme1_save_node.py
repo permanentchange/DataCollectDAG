@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -312,3 +313,79 @@ def test_build_camera_config_rejects_invalid_calibration_resolution(resolution):
 
     with pytest.raises(ValueError, match="camera calibration resolution"):
         _build_camera_config(camera_params, SimpleNamespace(width=960, height=540))
+
+
+def test_save_raw_images_and_per_camera_distortion_params(dummy_session, image_frame):
+    dummy_session.storage_tracker = StorageTracker(dummy_session.app_config.output_root_dir, 1, lambda: None)
+    dummy_session.storage_tracker.reconcile()
+    topic_keys = [key for key, topic in dummy_session.app_config.topics.items() if topic.role == "image"]
+    sample = SampleContext(sample_id="raw")
+    sample.put("pointcloud", _base_pointcloud(), "test")
+    inputs = {"pointcloud": "pointcloud"}
+    cameras = []
+    frames = []
+    for index, topic_key in enumerate(topic_keys):
+        binding = f"camera_{index}"
+        inputs[binding] = topic_key
+        cameras.append({"input_name": binding, "topic_key": topic_key})
+        pixels = np.arange(4 * 6 * 3, dtype=np.uint8).reshape(4, 6, 3) + index * 10
+        frame = replace(image_frame, meta=make_meta(topic_key, "image", 1_000_000_000), image_bgr=pixels)
+        frames.append(frame)
+        sample.put(topic_key, frame, "test")
+        params = dummy_session.calibration["images"][dummy_session.app_config.topics[topic_key].topic]
+        params.update({
+            "dist_model": "equidistant", "dist_coeffs": [0.1 + index, -0.02, 0.003, -0.004],
+            "resolution": [12, 8], "camera_matrix": [[100, 0, 6], [0, 120, 4], [0, 0, 1]],
+        })
+    node = _node(dummy_session, inputs=inputs, cameras=cameras)
+    node.config["include_distortion_params"] = True
+    node.setup()
+    assert node.run(sample).status == NodeResult.OK
+    saved = sample.metadata["save_result"]
+    config = json.loads(Path(saved["camera_config"]).read_text())
+    for index, (entry, frame) in enumerate(zip(config["items"], frames)):
+        assert entry["dist_model"] == "equidistant"
+        assert entry["dist_coeffs"] == [0.1 + index, -0.02, 0.003, -0.004]
+        assert "is_fisheye" not in entry and "distortion_model" not in entry
+        assert entry["camera_internal"] == {"fx": 50, "fy": 60, "cx": 3, "cy": 2}
+        reference = BytesIO()
+        Image.fromarray(frame.image_bgr[:, :, ::-1]).save(reference, format="JPEG", quality=95)
+        assert Path(saved["images"][index]).read_bytes() == reference.getvalue()
+    assert dummy_session.storage_tracker.size_bytes == sum(scan_files(dummy_session.app_config.output_root_dir).values())
+
+
+def test_distortion_export_rejects_undistorted_sample_before_writing(dummy_session, image_frame):
+    sample = SampleContext(sample_id="corrected")
+    sample.put("image", image_frame, "test")
+    sample.put("pointcloud", _base_pointcloud(), "test")
+    sample.metadata["undistort_camera_params"] = {"front_wide_camera": {}}
+    node = _node(dummy_session,
+                 inputs={"pointcloud": "pointcloud", "camera": "image"},
+                 cameras=[{"input_name": "camera", "topic_key": "front_wide_camera"}])
+    node.config["include_distortion_params"] = True
+    node.setup()
+    outcome = node.run(sample)
+    assert outcome.status == NodeResult.FAIL_SAMPLE and "require_raw_images" in outcome.reason
+    assert not list(node._save_root.rglob("*.jpg"))
+    assert not list(node._save_root.rglob("*.pcd"))
+    assert not list(node._save_root.rglob("*.json"))
+    assert "save_result" not in sample.metadata
+
+
+@pytest.mark.parametrize("field", ["dist_model", "dist_coeffs"])
+def test_distortion_export_requires_source_calibration_at_setup(dummy_session, field):
+    params = dummy_session.calibration["images"][dummy_session.app_config.topics["front_wide_camera"].topic]
+    params.pop(field)
+    node = _node(dummy_session,
+                 inputs={"pointcloud": "pointcloud", "camera": "image"},
+                 cameras=[{"input_name": "camera", "topic_key": "front_wide_camera"}])
+    node.config["include_distortion_params"] = True
+    with pytest.raises(ValueError, match=f"front_wide_camera.*{field}"):
+        node.setup()
+    assert not (dummy_session.session_root / "xtreme1").exists()
+
+
+def test_default_camera_json_has_no_distortion_extension(dummy_session):
+    params = next(iter(dummy_session.calibration["images"].values()))
+    result = _build_camera_config(params, SimpleNamespace(width=6, height=4))
+    assert set(result) == {"camera_internal", "width", "height", "camera_external", "rowMajor"}

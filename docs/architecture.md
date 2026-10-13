@@ -103,7 +103,7 @@ pipelines:
 - `stop_conditions.max_duration_sec` 和 `max_saved_samples` 都可省略；达到条件后结束当前 session，状态为 `COMPLETED`。持续时间不累计暂停时间。
 - 缓存必须为每个配置的 role/topic 提供 `max_frames` 与 `max_age_sec`；不配置完整策略会导致配置解析失败。
 
-完整示例：`demo/cfg.yaml` 包含 `init`、`fps`、`fps_with_yolo`、`compare_motion`；`demo/xtreme1_demo.yaml` 包含 `init`、`lidar_camera_1fps`、`lidar_frontcamera_1fps`、`person_1fps`。
+完整示例：`demo/cfg.yaml` 包含 `init`、`fps`、`fps_undist`、`fps_with_yolo`、`compare_motion`。`fps_undist` 保留 fps 的采样、同步及点云处理，跳过去畸变，按原相机顺序保存五路原图 JPEG。
 
 ## 3. 内置节点
 
@@ -122,6 +122,8 @@ pipelines:
 
 `fps_guard` 读取主帧时间戳；`fps_marker` 用相同 `gate_id` 更新已接受样本的时间戳。两者按 pipeline DAG 的依赖顺序连接，而不是单纯限制所有输入消息数量。详情见 `nodes/common.py`。
 
+`xtreme1_structured_save.config.include_distortion_params` 是布尔值，默认 `false`；`fps_undist` 设置为 `true`，在每个相机 JSON 的 `items[i]` 中增加与 `camera_internal` 同级的 `dist_model` 和 `dist_coeffs`。数值取自对应源标定，系数不随分辨率缩放；内参沿用现有的分辨率缩放规则。节点初始化时验证畸变参数；启用该模式但存在对应相机的去畸变元数据时拒绝保存该样本，避免参数与图像不匹配。其他 pipeline 默认不增加这些字段。
+
 `yolo_gate` 的 `config` 必须包含 `model_path`、`class_names`、`confidence_thresholds`、`min_area_ratios`、`predict_conf`，同时将图像输入映射为 `inputs.image`。三个列表按下标对齐，`predict_conf` 不得大于最小的类别阈值；`failure_policy` 只接受 `skip_sample`。`device: cpu` 为默认设置；`device: auto` 对非 `.engine` 模型优先检查 CUDA，并在推理异常时重试 CPU。明确指定 CUDA 且不可用则初始化失败；TensorRT `.engine` 不支持自动切换到 CPU。
 
 `ultralytics` 和 `torch` 仅在 YOLO 节点初始化的相应路径中导入；非 YOLO 的 `fps` 只依赖基础安装。`onnx-cpu` / `onnx-gpu` 是可选安装组，**当前没有独立的 ONNX DAG 节点**。
@@ -129,6 +131,10 @@ pipelines:
 ## 4. 数据与文件
 
 `ros_messages.py` 将 ROS 消息包装为图像、点云、定位、IMU、里程计或文本 frame。图像解码和点云解析可以在处理节点使用数据时延后进行。标定 JSON 通过 `app.py::load_calibration` 读取，使用顶层 `images` 和 `pointclouds`；点云变换只选取包含 `sensor2base` 的条目。
+
+相机标定采用明确的模型标识：当前仅支持 `dist_model: equidistant`，要求 `dist_coeffs` 含四个有限数值，顺序为 OpenCV fisheye 的 `[k1, k2, k3, k4]`。模型字符串定义参数的数学含义，不按系数数量推断；未知模型明确报错。`image_undistort` 继续使用现有 OpenCV fisheye 映射算法，诊断 JSON 也记录源模型。
+
+这是标定格式的破坏性变更：加载时拒绝旧 `is_fisheye` 字段、缺失模型或非法系数。仓库标定已迁移；外部旧文件需要将 `"is_fisheye": true` 替换为 `"dist_model": "equidistant"`，其余数值保持不变。`tools/cali_parser.py` 继续转换四系数鱼眼标定，输出新字段。
 
 一次 session 的根目录是：
 

@@ -109,4 +109,6 @@ def dummy_session(tmp_path):
             "/livox/lidar_rb": np.eye(4, dtype=np.float64).tolist(),
         },
     }
+    for camera_params in session.calibration["images"].values():
+        camera_params.update({"dist_model": "equidistant", "dist_coeffs": [-0.1, 0.01, 0.0, 0.0]})
     return session

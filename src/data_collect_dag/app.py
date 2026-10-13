@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+from data_collect_dag.camera_calibration import read_distortion_params
 from data_collect_dag.config import load_app_config
 from data_collect_dag.control import ControlCommand, ControlCommandQueue
 from data_collect_dag.logging_utils import configure_logging
@@ -21,6 +22,11 @@ from data_collect_dag.status import StatusManager
 def load_calibration(calibration_path: Path) -> Dict[str, Any]:
     payload = json.loads(calibration_path.read_text(encoding="utf-8"))
     images = payload.get("images") or {}
+    for topic, camera_params in images.items():
+        try:
+            read_distortion_params(camera_params)
+        except ValueError as exc:
+            raise ValueError(f"invalid camera calibration for {topic}: {exc}") from exc
     pointclouds = payload.get("pointclouds") or {}
     normalized_pointclouds = {
         topic: entry["sensor2base"]

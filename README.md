@@ -66,6 +66,9 @@ Start `roscore` in a separate terminal; source ROS and your Python environment i
 # No YOLO/PyTorch required
 data_collect_dag --config demo/cfg.yaml --pipeline fps
 
+# Original images, with dist_model and dist_coeffs in each camera JSON
+data_collect_dag --config demo/cfg.yaml --pipeline fps_undist
+
 # YOLO and model weights required
 data_collect_dag --config demo/cfg.yaml --pipeline fps_with_yolo
 ```
@@ -107,7 +110,7 @@ Available sample pipelines:
 
 | Configuration | Pipeline | Inference required |
 | --- | --- | --- |
-| `demo/cfg.yaml` | `init`, `fps`, `compare_motion` | No |
+| `demo/cfg.yaml` | `init`, `fps`, `fps_undist`, `compare_motion` | No |
 | `demo/cfg.yaml` | `fps_with_yolo` | YOLO |
 | `demo/xtreme1_demo.yaml` | `lidar_camera_1fps`, `lidar_frontcamera_1fps` | No |
 | `demo/xtreme1_demo.yaml` | `init`, `person_1fps` | YOLO |
@@ -120,6 +123,10 @@ mkdir -p demo/models
 ``` Some sample configurations explicitly request CUDA, so a CPU-only environment must use a non-inference pipeline or change the YOLO node's `device` setting.
 
 Relative values in `output.root_dir`, `calibration.path` and YOLO `model_path` are resolved against the **current working directory**, not the YAML's directory. Use absolute paths when launching from elsewhere. The convenience script `bash run.sh /absolute/path/config.yaml [pipeline_name]` changes its working directory to the repository root.
+
+`fps_undist` saves original images without undistortion, encoded as JPEG; its FPS control, synchronization and lidar processing match `fps`. Each camera entry in `camera_config/<timestamp>.json` includes the source `dist_model` and `dist_coeffs`, with intrinsics scaled to the saved image resolution. Existing pipelines keep their camera JSON format.
+
+Camera calibration entries now require `"dist_model": "equidistant"` and four finite numeric `dist_coeffs` in OpenCV fisheye order `[k1, k2, k3, k4]`. This is a breaking calibration-format change: replace `"is_fisheye": true` with the new field in external calibration files. Legacy `is_fisheye`, missing fields and other models are rejected. The repository's calibration files and conversion tool use the new field; only the existing equidistant algorithm is supported.
 
 ## ROS control and results
 

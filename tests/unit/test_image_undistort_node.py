@@ -13,7 +13,7 @@ def _make_node(dummy_session):
     calibration.update(
         {
             "dist_coeffs": [-0.1, 0.01, 0.0, 0.0],
-            "is_fisheye": True,
+            "dist_model": "equidistant",
             "resolution": [6, 4],
             "camera_matrix": [[4.0, 0.0, 3.0], [0.0, 4.0, 2.0], [0.0, 0.0, 1.0]],
         }
@@ -99,3 +99,16 @@ def test_image_undistort_scales_intrinsics_for_same_aspect_ratio_input(dummy_ses
         [0.0, 2.0, 1.0],
         [0.0, 0.0, 1.0],
     ]
+
+
+@pytest.mark.parametrize("change,error", [
+    ({"dist_model": "plumb_bob"}, "unsupported camera dist_model"),
+    ({"dist_model": None}, "missing valid dist_model"),
+    ({"is_fisheye": True}, "is_fisheye is no longer supported"),
+])
+def test_image_undistort_rejects_unsupported_or_legacy_model(dummy_session, change, error):
+    node = _make_node(dummy_session)
+    params = dummy_session.calibration["images"]["/miivii_gmsl_camera_node/miivii_gmsl/image2"]
+    params.update(change)
+    with pytest.raises(ValueError, match=error):
+        node.setup()

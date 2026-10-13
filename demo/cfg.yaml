@@ -191,6 +191,7 @@ pipelines:
       - [sync_top_lidar, end]
       - [sync_corner_lidars, end]
       - [sync_images, end]
+  
   fps:
     description: Save data on target fps.
     main_source: front_ext_camera
@@ -445,6 +446,210 @@ pipelines:
       - [undistort_rear, save_xtreme1]
       - [undistort_left, save_xtreme1]
       - [undistort_right, save_xtreme1]
+      - [save_xtreme1, fps_marker]
+      - [fps_marker, end]
+
+  fps_undist:
+    description: Save original distorted images on target fps.
+    main_source: front_ext_camera
+    topics:
+      - front_ext_camera
+      - front_camera
+      - rear_camera
+      - left_camera
+      - right_camera
+      - top_lidar
+      - front_right_lidar
+      - rear_right_lidar
+      - front_left_lidar
+      - rear_left_lidar
+      - imu
+      - bdstar_nmea
+      - odom
+      - localization
+    time_delay_ms: 500
+    stop_conditions:
+      max_duration_sec: 6000
+    nodes:
+      - node_id: start
+        type: start
+      - node_id: fps_guard
+        type: fps_guard
+        config:
+          gate_id: saved_sample_fps
+          max_fps: 1.0
+      - node_id: sync_top_lidar
+        type: time_sync
+        inputs:
+          reference_frame: main_frame
+        outputs:
+          matched_frame: top_lidar_synced
+        config:
+          source: top_lidar
+          strategy: nearest
+          max_time_diff_ms: 50
+          wait_timeout_ms: 400
+          required: true
+      - node_id: sync_corner_lidars
+        type: multi_time_sync
+        inputs:
+          reference_frame: top_lidar_synced
+        outputs:
+          front_left_lidar: front_left_lidar
+          front_right_lidar: front_right_lidar
+          rear_left_lidar: rear_left_lidar
+          rear_right_lidar: rear_right_lidar
+        config:
+          sources:
+            - front_left_lidar
+            - front_right_lidar
+            - rear_left_lidar
+            - rear_right_lidar
+          strategy: nearest
+          max_time_diff_ms: 20
+          wait_timeout_ms: 400
+          required: true
+      - node_id: sync_images
+        type: multi_time_sync
+        inputs:
+          reference_frame: main_frame
+        outputs:
+          front_camera: front_camera
+          rear_camera: rear_camera
+          left_camera: left_camera
+          right_camera: right_camera
+        config:
+          sources:
+            - front_camera
+            - rear_camera
+            - left_camera
+            - right_camera
+          strategy: nearest
+          max_time_diff_ms: 20
+          wait_timeout_ms: 400
+          required: true
+      - node_id: top_lidar_motion
+        type: pointcloud_motion_compensation
+        inputs:
+          pointcloud: top_lidar_synced
+          reference_frame: main_frame
+        outputs:
+          pointcloud: top_lidar_compensated
+        config:
+          sensor_topic: /rslidar_points
+          localization_source: localization
+          pose_wait_timeout_ms: 400
+          required: true
+          use_base_frame: true
+      - node_id: front_left_motion
+        type: pointcloud_motion_compensation
+        inputs:
+          pointcloud: front_left_lidar
+          reference_frame: main_frame
+        outputs:
+          pointcloud: front_left_compensated
+        config:
+          sensor_topic: /livox/lidar_lf
+          localization_source: localization
+          pose_wait_timeout_ms: 400
+          required: true
+          use_base_frame: true
+      - node_id: front_right_motion
+        type: pointcloud_motion_compensation
+        inputs:
+          pointcloud: front_right_lidar
+          reference_frame: main_frame
+        outputs:
+          pointcloud: front_right_compensated
+        config:
+          sensor_topic: /livox/lidar_rf
+          localization_source: localization
+          pose_wait_timeout_ms: 400
+          required: true
+          use_base_frame: true
+      - node_id: rear_left_motion
+        type: pointcloud_motion_compensation
+        inputs:
+          pointcloud: rear_left_lidar
+          reference_frame: main_frame
+        outputs:
+          pointcloud: rear_left_compensated
+        config:
+          sensor_topic: /livox/lidar_lb
+          localization_source: localization
+          pose_wait_timeout_ms: 400
+          required: true
+          use_base_frame: true
+      - node_id: rear_right_motion
+        type: pointcloud_motion_compensation
+        inputs:
+          pointcloud: rear_right_lidar
+          reference_frame: main_frame
+        outputs:
+          pointcloud: rear_right_compensated
+        config:
+          sensor_topic: /livox/lidar_rb
+          localization_source: localization
+          pose_wait_timeout_ms: 400
+          required: true
+          use_base_frame: true
+      - node_id: aggregate_pointclouds
+        type: aggregate_pointclouds
+        outputs:
+          pointcloud: aggregated_pointcloud
+        config:
+          required_inputs:
+            - top_lidar_compensated
+            - front_left_compensated
+            - front_right_compensated
+            - rear_left_compensated
+            - rear_right_compensated
+      - node_id: save_xtreme1
+        type: xtreme1_structured_save
+        inputs:
+          pointcloud: aggregated_pointcloud
+          camera_0: main_frame
+          camera_1: front_camera
+          camera_2: rear_camera
+          camera_3: left_camera
+          camera_4: right_camera
+        config:
+          dataset_name: collect_demo
+          include_distortion_params: true
+          cameras:
+            - input_name: camera_0
+              topic_key: front_ext_camera
+            - input_name: camera_1
+              topic_key: front_camera
+            - input_name: camera_2
+              topic_key: rear_camera
+            - input_name: camera_3
+              topic_key: left_camera
+            - input_name: camera_4
+              topic_key: right_camera
+      - node_id: fps_marker
+        type: fps_marker
+        config:
+          gate_id: saved_sample_fps
+      - node_id: end
+        type: end
+    edges:
+      - [start, fps_guard]
+      - [fps_guard, sync_top_lidar]
+      - [sync_top_lidar, sync_corner_lidars]
+      - [fps_guard, sync_images]
+      - [sync_top_lidar, top_lidar_motion]
+      - [sync_corner_lidars, front_left_motion]
+      - [sync_corner_lidars, front_right_motion]
+      - [sync_corner_lidars, rear_left_motion]
+      - [sync_corner_lidars, rear_right_motion]
+      - [top_lidar_motion, aggregate_pointclouds]
+      - [front_left_motion, aggregate_pointclouds]
+      - [front_right_motion, aggregate_pointclouds]
+      - [rear_left_motion, aggregate_pointclouds]
+      - [rear_right_motion, aggregate_pointclouds]
+      - [aggregate_pointclouds, save_xtreme1]
+      - [sync_images, save_xtreme1]
       - [save_xtreme1, fps_marker]
       - [fps_marker, end]
 
@@ -751,6 +956,7 @@ pipelines:
       - [undistort_right, save_xtreme1]
       - [save_xtreme1, fps_marker]
       - [fps_marker, end]
+  
   compare_motion:
     description: Save data on target fps.
     main_source: front_ext_camera

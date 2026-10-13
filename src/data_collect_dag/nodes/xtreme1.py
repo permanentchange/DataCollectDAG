@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from data_collect_dag.camera_calibration import read_distortion_params
 from data_collect_dag.io_utils import save_ascii_pcd, save_jpg, write_json
 from data_collect_dag.models import NodeOutcome, NodeResult
 from data_collect_dag.nodes.base import BaseNode
@@ -15,6 +16,9 @@ from data_collect_dag.sample_context import MissingContextKeyError
 class Xtreme1SaveNode(BaseNode):
     def setup(self) -> None:
         self._dataset_name = str(self.config.get("dataset_name", "collect_demo"))
+        self._include_distortion_params = self.config.get("include_distortion_params", False)
+        if not isinstance(self._include_distortion_params, bool):
+            raise ValueError("include_distortion_params must be a boolean")
         if "pointcloud" not in self.inputs:
             raise ValueError("pointcloud input is required")
         self._cameras = _resolve_camera_bindings(
@@ -23,6 +27,12 @@ class Xtreme1SaveNode(BaseNode):
             self.session.app_config.topics,
             self.session.calibration["images"],
         )
+        if self._include_distortion_params:
+            for _, topic_key, ros_topic in self._cameras:
+                try:
+                    read_distortion_params(self.session.calibration["images"][ros_topic])
+                except ValueError as exc:
+                    raise ValueError(f"invalid camera calibration for {topic_key}: {exc}") from exc
         self._save_root = self.session.session_root / "xtreme1" / self._dataset_name
         (self._save_root / "camera_config").mkdir(parents=True, exist_ok=True)
         (self._save_root / "lidar_point_cloud_0").mkdir(parents=True, exist_ok=True)
@@ -42,6 +52,11 @@ class Xtreme1SaveNode(BaseNode):
                     input_name,
                 )
                 return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_{input_name}_missing")
+
+        if self._include_distortion_params:
+            corrected = sample.metadata.get("undistort_camera_params", {})
+            if any(topic_key in corrected for _, topic_key, _ in self._cameras):
+                return NodeOutcome(status=NodeResult.FAIL_SAMPLE, reason=f"{self.node_id}_distortion_params_require_raw_images")
 
         camera_images = [
             ensure_image_frame_decoded(sample.get(self.inputs[input_name]))
@@ -71,7 +86,7 @@ class Xtreme1SaveNode(BaseNode):
             corrected_params = sample.metadata.get("undistort_camera_params", {}).get(topic_key)
             if corrected_params is not None:
                 camera_params.update(corrected_params)
-            camera_configs.append(_build_camera_config(camera_params, image))
+            camera_configs.append(_build_camera_config(camera_params, image, self._include_distortion_params))
         pcd_path = self._save_root / "lidar_point_cloud_0" / f"{stem}.pcd"
         assert pointcloud.points_xyz is not None
         try:
@@ -147,7 +162,7 @@ def _resolve_camera_bindings(
     return bindings
 
 
-def _build_camera_config(camera_params: Dict[str, Any], image) -> Dict[str, Any]:
+def _build_camera_config(camera_params: Dict[str, Any], image, include_distortion_params: bool = False) -> Dict[str, Any]:
     matrix = np.asarray(camera_params["camera_matrix"], dtype=np.float64)
     calibration_resolution = camera_params.get("resolution")
     calibration_width = 0
@@ -164,7 +179,7 @@ def _build_camera_config(camera_params: Dict[str, Any], image) -> Dict[str, Any]
     height = int(image.height) if image is not None else calibration_height
     scale_x = float(width) / float(calibration_width) if image is not None and calibration_width else 1.0
     scale_y = float(height) / float(calibration_height) if image is not None and calibration_height else 1.0
-    return {
+    result = {
         "camera_internal": {
             "fx": float(matrix[0][0]) * scale_x,
             "fy": float(matrix[1][1]) * scale_y,
@@ -176,3 +191,7 @@ def _build_camera_config(camera_params: Dict[str, Any], image) -> Dict[str, Any]
         "camera_external": np.asarray(camera_params["base2camera"], dtype=np.float64).reshape(-1, order="F").tolist(),
         "rowMajor": False,
     }
+    if include_distortion_params:
+        model, coeffs = read_distortion_params(camera_params)
+        result.update({"dist_model": model, "dist_coeffs": coeffs.reshape(-1).tolist()})
+    return result

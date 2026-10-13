@@ -62,7 +62,7 @@
           1.0
         ]
       ],
-      "is_fisheye": true
+      "dist_model": "equidistant"
     },
     "/miivii_gmsl_camera_node/miivii_gmsl/image7": {
       "camera_matrix": [
@@ -126,7 +126,7 @@
           1.0
         ]
       ],
-      "is_fisheye": true
+      "dist_model": "equidistant"
     },
     "/miivii_gmsl_camera_node/miivii_gmsl/image2": {
       "camera_matrix": [
@@ -190,7 +190,7 @@
           1.0
         ]
       ],
-      "is_fisheye": true
+      "dist_model": "equidistant"
     },
     "/miivii_gmsl_camera_node/miivii_gmsl/image5": {
       "camera_matrix": [
@@ -254,7 +254,7 @@
           1.0
         ]
       ],
-      "is_fisheye": true
+      "dist_model": "equidistant"
     },
     "/miivii_gmsl_camera_node/miivii_gmsl/image4": {
       "camera_matrix": [
@@ -318,7 +318,7 @@
           1.0
         ]
       ],
-      "is_fisheye": true
+      "dist_model": "equidistant"
     }
   },
   "pointclouds": {

@@ -5,6 +5,7 @@ from typing import Any, Dict, Tuple
 
 import numpy as np
 
+from data_collect_dag.camera_calibration import read_distortion_params
 from data_collect_dag.io_utils import save_jpg, write_json
 from data_collect_dag.models import ImageFrame, NodeOutcome, NodeResult
 from data_collect_dag.nodes.base import BaseNode
@@ -38,10 +39,8 @@ class ImageUndistortNode(BaseNode):
         camera_params = self.session.calibration.get("images", {}).get(topic_config.topic)
         if not isinstance(camera_params, dict):
             raise ValueError(f"missing camera calibration for {self._source} -> {topic_config.topic}")
-        if camera_params.get("is_fisheye") is not True:
-            raise ValueError(f"image_undistort node {self.node_id} calibration must set is_fisheye: true")
+        self._dist_model, self._dist_coeffs = read_distortion_params(camera_params)
         self._camera_matrix = _read_camera_matrix(camera_params)
-        self._dist_coeffs = _read_dist_coeffs(camera_params)
         self._resolution = _read_resolution(camera_params)
         self._write_debug_artifacts = bool(self.config.get("write_debug_artifacts", False))
         self._maps_by_resolution: Dict[Tuple[int, int], Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
@@ -145,6 +144,7 @@ class ImageUndistortNode(BaseNode):
                 "calibration_resolution": list(self._resolution),
                 "resolution": list(image_size),
                 "camera_matrix": self._camera_matrix.tolist(),
+                "dist_model": self._dist_model,
                 "dist_coeffs": self._dist_coeffs.reshape(-1).tolist(),
                 "undistorted_camera_matrix": corrected_matrix.tolist(),
             },
@@ -160,16 +160,6 @@ def _read_camera_matrix(camera_params: Dict[str, Any]) -> np.ndarray:
     if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
         raise ValueError("camera calibration camera_matrix must be a finite 3x3 matrix")
     return matrix
-
-
-def _read_dist_coeffs(camera_params: Dict[str, Any]) -> np.ndarray:
-    try:
-        coeffs = np.asarray(camera_params["dist_coeffs"], dtype=np.float64).reshape(-1, 1)
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("camera calibration missing valid dist_coeffs") from exc
-    if coeffs.shape != (4, 1) or not np.all(np.isfinite(coeffs)):
-        raise ValueError("camera calibration dist_coeffs must contain four finite values")
-    return coeffs
 
 
 def _read_resolution(camera_params: Dict[str, Any]) -> Tuple[int, int]:

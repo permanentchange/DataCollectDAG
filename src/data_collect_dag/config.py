@@ -305,6 +305,9 @@ def _validate_node_config(pipeline_name: str, node_config: NodeConfig, topics: D
         _validate_yolo_gate_config(pipeline_name, node_config)
     elif node_config.node_type == "image_undistort":
         _validate_image_undistort_config(pipeline_name, node_config, topics)
+    elif node_config.node_type == "xtreme1_structured_save":
+        if not isinstance(node_config.config.get("include_distortion_params", False), bool):
+            raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} include_distortion_params must be a boolean")
 
 
 def _validate_non_empty_gate_id(pipeline_name: str, node_config: NodeConfig) -> None:

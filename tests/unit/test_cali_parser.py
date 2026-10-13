@@ -1,4 +1,6 @@
 import importlib.util
+import cv2
+import numpy as np
 from pathlib import Path
 
 
@@ -23,3 +25,22 @@ def test_resolve_output_path_expands_explicit_output_path():
     parser = load_cali_parser()
 
     assert parser.resolve_output_path(Path("/tmp/vehicle"), Path("~/cali.json")) == Path.home() / "cali.json"
+
+
+def test_camera_conversion_outputs_explicit_model_and_preserves_coefficients(tmp_path):
+    parser = load_cali_parser()
+    path = tmp_path / "camera.yaml"
+    coeffs = np.array([0.1, -0.02, 0.003, -0.004])
+    fs = cv2.FileStorage(str(path), cv2.FILE_STORAGE_WRITE)
+    try:
+        fs.write("topic", "/camera")
+        fs.write("camera_matrix", np.eye(3))
+        fs.write("dist_coeffs", coeffs.reshape(4, 1))
+        fs.write("resolution", np.array([[1920], [1080]]))
+        fs.write("base2camera", np.eye(4))
+    finally:
+        fs.release()
+    result = parser.parse_camera_yaml(path)["/camera"]
+    assert result["dist_model"] == "equidistant"
+    assert result["dist_coeffs"] == coeffs.tolist()
+    assert "is_fisheye" not in result and "distortion_model" not in result

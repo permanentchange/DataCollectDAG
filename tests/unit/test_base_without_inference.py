@@ -4,12 +4,14 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_fps_pipeline_does_not_import_optional_inference_libraries(tmp_path):
+@pytest.mark.parametrize("pipeline_name", ["fps", "fps_undist"])
+def test_fps_pipeline_does_not_import_optional_inference_libraries(tmp_path, pipeline_name):
     # A fresh process prevents an earlier test from hiding eager imports in
     # sys.modules. The import blocker simulates an environment without ML.
     script = r'''
@@ -39,7 +41,7 @@ from data_collect_dag.status import StatusManager
 
 config = load_app_config(Path("demo/cfg.yaml"))
 config.output_root_dir = Path(os.environ["DCD_TEST_OUTPUT"])
-pipeline = config.pipelines["fps"]
+pipeline = config.pipelines[os.environ["DCD_TEST_PIPELINE"]]
 assert pipeline.nodes_by_id
 assert all(node.node_type != "yolo_gate" for node in pipeline.nodes_by_id.values())
 
@@ -65,6 +67,7 @@ assert not blocked.intersection(sys.modules)
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
     env["DCD_TEST_OUTPUT"] = str(tmp_path)
+    env["DCD_TEST_PIPELINE"] = pipeline_name
     process = subprocess.run(
         [sys.executable, "-c", script],
         cwd=str(ROOT),
