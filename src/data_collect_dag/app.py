@@ -162,7 +162,10 @@ class AppRuntime:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Data collection DAG demo runtime")
-    parser.add_argument("--config", required=True, type=Path)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--config", type=Path)
+    source.add_argument("--init-demo", type=Path, metavar="DIR", help="export bundled demo templates and exit (no ROS needed)")
+    parser.add_argument("--force", action="store_true", help="overwrite template files; only valid with --init-demo")
     parser.add_argument("--pipeline", default='init')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--clean", type=_nonnegative_days, metavar="DAY", help="delete expired session directories and exit (0: all, 1: keep today)")

@@ -16,6 +16,7 @@ CLI / python -m data_collect_dag
 ```
 
 - `AppRuntime` 初始化时加载 YAML 和标定 JSON；`calibration.path` 必须提供且文件可读。`AppRuntime.run` 等待 ROS master、初始化 ROS adapter，然后通过控制队列启动 CLI 指定的 pipeline。
+- `--init-demo DIR` 从发行包离线导出全部 demo YAML/标定 JSON，并创建 `models/` 目录，不创建运行时或启动 ROS；可编辑安装使用源码中的 demo。标定和模型的 `demo/` 相对引用改为导出目录内的绝对路径，其他配置不变。默认发现任何模板重名即在写入前退出；`--force` 仅覆盖模板文件，保留其他文件与模型权重。目录内指向外部的目录符号链接被拒绝，文件符号链接在覆盖时替换为普通文件，不修改链接目标。此模式与 `--config`、`--clean`、`--background` 互斥，`--force` 仅适用于此模式；升级包不会修改已经导出的配置。
 - `--background` 在创建运行时之前用当前 Python 启动独立进程并立即返回 PID；子进程继承环境和工作目录，终端关闭后继续运行，stdout/stderr 追加到 `<output.root_dir>/background.log`。它与 `--clean` 互斥；启动失败详情见日志。ROS `shutdown` 与 SIGINT/SIGTERM 都通过控制队列收尾并退出整个程序；`stop` 只停止 session。
 - `RosAdapter` 订阅配置中 **所有** `ros.topics`；只有绑定活动 session 时，帧才进入其缓存。消息转换、接入和状态发布由 ROS 适配层承担。
 - `SessionManager` 同时只维护一个 session；新的 `start` 会先结束原 session。`pause` 停止接收新帧并阻止新样本开始处理；`resume` 恢复。

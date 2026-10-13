@@ -1,0 +1,3 @@
+include demo/*.yaml
+include demo/*.yml
+include demo/calibration/*.json

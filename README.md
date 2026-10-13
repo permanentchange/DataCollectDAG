@@ -29,9 +29,21 @@ Alternatively, install the base package directly from GitHub:
 
 ```bash
 python3.8 -m pip install 'git+https://github.com/permanentchange/DataCollectDAG.git'
+data_collect_dag --init-demo ~/dcd-demo
+data_collect_dag --config ~/dcd-demo/cfg.yaml --pipeline fps_undist
 ```
 
-The GitHub installation includes the Python package, **not** the `demo/` configurations, calibration files or model weights. Supply those files separately.
+Wheel and source distributions include demo YAML and calibration JSON templates. `--init-demo DIR` exports them offline without starting ROS, and creates a `models/` directory for your own weights. It exports all templates; `--pipeline` does not filter them. Model weights, ROS bags and collection results are not bundled. Review the example calibration, topics and storage settings before collecting on your device.
+
+Exported calibration and model references use absolute paths under `DIR`, so you can run from any working directory. Other settings, including `output.root_dir`, stay unchanged. If you move the exported directory, update these paths or export again. `calibration/cali.json` is a regular file containing the default SA4 calibration, not a symlink.
+
+By default, any existing template filename aborts the export before files are written. After upgrading the package, export to a new directory to compare configurations, or explicitly replace the templates:
+
+```bash
+data_collect_dag --init-demo ~/dcd-demo --force
+```
+
+`--force` replaces only bundled template filenames (including any edits you made to them); unrelated files and existing model weights are preserved. Export refuses directory symlinks that lead outside the destination. Package upgrades never change previously exported configurations. Editable installations export the checkout's current demo files; ordinary installations export templates shipped with that package version.
 
 ### Optional inference and tools
 
@@ -73,7 +85,7 @@ data_collect_dag --config demo/cfg.yaml --pipeline fps_undist
 data_collect_dag --config demo/cfg.yaml --pipeline fps_with_yolo
 ```
 
-The CLI also supports `python -m data_collect_dag --config ... --pipeline ...`. The `--config` argument is required; `--pipeline` defaults to `init`.
+The CLI also supports `python -m data_collect_dag --config ... --pipeline ...`. Choose either `--config` to run/clean or `--init-demo DIR` to export; `--pipeline` defaults to `init`. Export cannot be combined with `--config`, `--clean` or `--background`; `--force` is only valid for export.
 
 To run in the background and keep running after closing the terminal:
 
@@ -112,17 +124,17 @@ Available sample pipelines:
 | --- | --- | --- |
 | `demo/cfg.yaml` | `init`, `fps`, `fps_undist`, `compare_motion` | No |
 | `demo/cfg.yaml` | `fps_with_yolo` | YOLO |
-| `demo/xtreme1_demo.yaml` | `lidar_camera_1fps`, `lidar_frontcamera_1fps` | No |
-| `demo/xtreme1_demo.yaml` | `init`, `person_1fps` | YOLO |
 
-Both demo YAML files reference `demo/calibration/cali.json`. YOLO pipelines reference `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself:
+The checkout's demo YAML references `demo/calibration/cali.json`. Its YOLO pipeline references `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself (or put it in `<export-dir>/models/` for an exported configuration):
 
 ```bash
 mkdir -p demo/models
 # Place your compatible checkpoint at demo/models/yolo26m.pt
-``` Some sample configurations explicitly request CUDA, so a CPU-only environment must use a non-inference pipeline or change the YOLO node's `device` setting.
+```
 
-Relative values in `output.root_dir`, `calibration.path` and YOLO `model_path` are resolved against the **current working directory**, not the YAML's directory. Use absolute paths when launching from elsewhere. The convenience script `bash run.sh /absolute/path/config.yaml [pipeline_name]` changes its working directory to the repository root.
+Some sample configurations explicitly request CUDA, so a CPU-only environment must use a non-inference pipeline or change the YOLO node's `device` setting.
+
+Relative values in `output.root_dir`, `calibration.path` and YOLO `model_path` are resolved against the **current working directory**, not the YAML's directory. Use absolute paths when launching from elsewhere; `--init-demo` already does this for the demo's calibration/model references. The convenience script `bash run.sh /absolute/path/config.yaml [pipeline_name]` changes its working directory to the repository root.
 
 `fps_undist` saves original images without undistortion, encoded as JPEG; its FPS control, synchronization and lidar processing match `fps`. Each camera entry in `camera_config/<timestamp>.json` includes the source `dist_model` and `dist_coeffs`, with intrinsics scaled to the saved image resolution. Existing pipelines keep their camera JSON format.
 

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-import sys
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
 
 from data_collect_dag.app import AppRuntime, build_parser
 from data_collect_dag.config import load_output_config
+from data_collect_dag.demo_templates import export_demo
 from data_collect_dag.logging_utils import BACKGROUND_LOG_FILENAME
 from data_collect_dag.storage import clean_sessions
 
@@ -33,6 +35,19 @@ def start_background(config_path: Path, pipeline_name: str) -> int:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.force and args.init_demo is None:
+        parser.error("--force requires --init-demo")
+    if args.init_demo is not None:
+        if args.background or args.clean is not None:
+            parser.error("--init-demo cannot be combined with --background or --clean")
+        try:
+            destination = export_demo(args.init_demo, force=args.force)
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            print(f"demo export failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"demo templates exported to {destination}")
+        print(f"data_collect_dag --config {shlex.quote(str(destination / 'cfg.yaml'))} --pipeline fps_undist")
+        return 0
     if args.background:
         try:
             return start_background(args.config, args.pipeline)
