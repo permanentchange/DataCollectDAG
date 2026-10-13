@@ -161,15 +161,30 @@ class AppRuntime:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Data collection DAG demo runtime")
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--config", type=Path)
-    source.add_argument("--init-demo", type=Path, metavar="DIR", help="export bundled demo templates and exit (no ROS needed)")
+    parser = argparse.ArgumentParser(
+        description="Data collection DAG runtime and demo utilities",
+        usage=(
+            "%(prog)s --config CONFIG [--pipeline PIPELINE] [--background]\n"
+            "       %(prog)s --config CONFIG --clean DAY\n"
+            "       %(prog)s --init-demo DIR [--force]"
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--config", type=Path, help="YAML configuration file; required for collection and cleanup")
+    source.add_argument("--init-demo", type=Path, metavar="DIR", help="export bundled demo templates and exit; no config or ROS needed")
     parser.add_argument("--force", action="store_true", help="overwrite template files; only valid with --init-demo")
-    parser.add_argument("--pipeline", default='init')
+    parser.add_argument("--pipeline", default="init", help="pipeline to run (default: init); ignored during cleanup/export")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--clean", type=_nonnegative_days, metavar="DAY", help="delete expired session directories and exit (0: all, 1: keep today)")
-    mode.add_argument("--background", action="store_true", help="run in the background; print PID and log path, then exit")
+    mode.add_argument(
+        "--clean", type=_nonnegative_days, metavar="DAY",
+        help=(
+            "clean sessions under output.root_dir and exit:\n"
+            "0=delete all, 1=keep today, 2=keep today and yesterday\n"
+            "requires --config; stop collection before cleanup"
+        ),
+    )
+    mode.add_argument("--background", action="store_true", help="run collection in the background; requires --config; print PID and log path")
     return parser
 
 

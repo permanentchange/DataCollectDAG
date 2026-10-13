@@ -87,6 +87,8 @@ data_collect_dag --config demo/cfg.yaml --pipeline fps_with_yolo
 
 The CLI also supports `python -m data_collect_dag --config ... --pipeline ...`. Choose either `--config` to run/clean or `--init-demo DIR` to export; `--pipeline` defaults to `init`. Export cannot be combined with `--config`, `--clean` or `--background`; `--force` is only valid for export.
 
+`data_collect_dag --help` lists collection, cleanup and export as separate command forms. Collection (including `--background`) and cleanup require a YAML file via `--config`; export does not. For example, `data_collect_dag --clean 1` reports `--clean requires --config CONFIG to determine output.root_dir`. No configuration or cleanup directory is selected automatically.
+
 To run in the background and keep running after closing the terminal:
 
 ```bash

@@ -38,8 +38,10 @@ def main() -> int:
     if args.force and args.init_demo is None:
         parser.error("--force requires --init-demo")
     if args.init_demo is not None:
-        if args.background or args.clean is not None:
-            parser.error("--init-demo cannot be combined with --background or --clean")
+        if args.background:
+            parser.error("--init-demo cannot be combined with --background")
+        if args.clean is not None:
+            parser.error("--init-demo cannot be combined with --clean")
         try:
             destination = export_demo(args.init_demo, force=args.force)
         except (OSError, ValueError, yaml.YAMLError) as exc:
@@ -48,6 +50,14 @@ def main() -> int:
         print(f"demo templates exported to {destination}")
         print(f"data_collect_dag --config {shlex.quote(str(destination / 'cfg.yaml'))} --pipeline fps_undist")
         return 0
+    if args.config is None:
+        if args.clean is not None:
+            parser.error("--clean requires --config CONFIG to determine output.root_dir")
+        if args.background:
+            parser.error("--background requires --config CONFIG")
+        if len(sys.argv) == 1:
+            parser.error("provide --config CONFIG to run collection, or --init-demo DIR to export templates; see --help")
+        parser.error("--config CONFIG is required to run collection")
     if args.background:
         try:
             return start_background(args.config, args.pipeline)
