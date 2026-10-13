@@ -47,7 +47,9 @@ def test_sdist_wheel_and_offline_demo_export(tmp_path):
     with tarfile.open(archive) as distribution:
         names = distribution.getnames()
         assert any(name.endswith("demo/cfg.yaml") for name in names)
-        assert any(name.endswith("demo/calibration/cali.json") for name in names)
+        assert any(name.endswith("demo/calibration/sa4/cali.json") for name in names)
+        assert any(name.endswith("demo/calibration/sa14/cali.json") for name in names)
+        assert not any(name.endswith("_cali.json") for name in names)
         assert not any("private" in name or "OUTPUT" in name for name in names)
         distribution.extractall(tmp_path / "extracted")
     extracted = next((tmp_path / "extracted").iterdir())
@@ -60,7 +62,7 @@ def test_sdist_wheel_and_offline_demo_export(tmp_path):
             bundled = {name: bundle.read(name) for name in bundle.namelist()}
     expected = {path.relative_to(demo).as_posix(): path.read_bytes()
                 for path in list(demo.glob("*.yaml")) + list(demo.glob("*.yml"))
-                + list((demo / "calibration").glob("*.json"))}
+                + list((demo / "calibration").rglob("*.json"))}
     assert bundled == expected
     run(["-m", "pip", "wheel", "--no-deps", "--no-build-isolation", "--wheel-dir", str(tmp_path / "direct-wheels"), "."], source)
     with ZipFile(next((tmp_path / "direct-wheels").glob("*.whl"))) as distribution:
@@ -87,6 +89,8 @@ assert Path(data_collect_dag.__file__).parent.parent.parent == Path(os.environ["
 from data_collect_dag.demo_templates import export_demo
 export_demo(Path("editable-export"))
 assert Path("editable-export/live.yaml").read_text() == "editable_revision: live\n"
+export_demo(Path("editable-sa14"), car_id="SA14")
+assert {path.name for path in Path("editable-sa14/calibration").iterdir()} == {"sa14"}
 '''], tmp_path)
     installed = tmp_path / "installed"
     run(["-m", "pip", "install", "--no-deps", "--target", str(installed), str(wheel)], tmp_path)
@@ -111,16 +115,25 @@ builtins.__import__ = no_external_import
 import data_collect_dag
 assert Path(data_collect_dag.__file__).parent.parent == Path(os.environ["DCD_INSTALLED"])
 from data_collect_dag.cli import main
+from data_collect_dag.demo_templates import available_car_ids, read_templates
 sys.argv = ["data_collect_dag", "--init-demo", "exported"]
 assert main() == 0
 from data_collect_dag.app import load_calibration
 from data_collect_dag.config import load_app_config
 config = load_app_config(Path("exported/cfg.yaml"))
-assert config.calibration_path == Path.cwd() / "exported/calibration/cali.json"
+assert config.calibration_path == Path.cwd() / "exported/calibration/sa4/cali.json"
+assert {path.name for path in Path("exported/calibration").iterdir()} == set(available_car_ids(read_templates()))
 assert load_calibration(config.calibration_path)["images"]
 assert "fps_undist" in config.pipelines
 assert not config.calibration_path.is_symlink()
 assert not list(Path("exported/models").iterdir())
+for car in ["sa4", "sa14"]:
+    sys.argv = ["data_collect_dag", "--init-demo", car, "--car-id", car.upper()]
+    assert main() == 0
+    config = load_app_config(Path(car) / "cfg.yaml")
+    assert config.calibration_path == Path.cwd() / car / "calibration" / car / "cali.json"
+    assert load_calibration(config.calibration_path)["images"]
+    assert {path.name for path in (Path(car) / "calibration").iterdir()} == {car}
 assert not blocked.intersection(sys.modules)
 '''
     run(["-c", script], tmp_path)

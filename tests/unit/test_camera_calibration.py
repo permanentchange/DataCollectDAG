@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 import numpy as np
@@ -64,9 +63,12 @@ def test_calibration_loader_preserves_pointcloud_normalization(tmp_path):
 
 def test_all_committed_demo_calibrations_use_new_model():
     directory = Path("demo/calibration")
-    assert (directory / "cali.json").is_symlink()
-    assert os.readlink(directory / "cali.json") == "sa4_cali.json"
-    for path in directory.glob("*.json"):
+    assert not list(directory.glob("*.json"))
+    paths = list(directory.glob("*/cali.json"))
+    assert len(paths) == 13
+    assert (directory / "sa4/cali.json") in paths
+    for path in paths:
+        assert not path.is_symlink()
         images = load_calibration(path)["images"]
         assert images
         assert all(entry["dist_model"] == "equidistant" and "is_fisheye" not in entry for entry in images.values())

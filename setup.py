@@ -14,14 +14,14 @@ class BuildPyWithDemo(build_py):
             return
         demo = Path(__file__).resolve().parent / "demo"
         assets = sorted(list(demo.glob("*.yaml")) + list(demo.glob("*.yml"))
-                        + list((demo / "calibration").glob("*.json")))
+                        + list((demo / "calibration").rglob("*.json")))
         if not assets:
             raise RuntimeError("demo templates are missing from the source distribution")
         archive = Path(self.build_lib) / "data_collect_dag" / "_demo.zip"
         archive.parent.mkdir(parents=True, exist_ok=True)
         with ZipFile(archive, "w", compression=ZIP_DEFLATED) as bundle:
             for asset in assets:
-                # Read symlinks as ordinary files (notably calibration/cali.json).
+                # Materialize resource files rather than storing symlinks.
                 bundle.writestr(asset.relative_to(demo).as_posix(), asset.read_bytes())
 
     def get_outputs(self, include_bytecode=1):

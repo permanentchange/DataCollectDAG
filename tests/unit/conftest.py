@@ -69,7 +69,7 @@ def dummy_session(tmp_path):
         cache_policies={key: CachePolicy(20, 1.0) for key in topics},
         runtime=RuntimeConfig(),
         pipelines={},
-        calibration_path=ROOT / "demo" / "calibration" / "sa1_cali.json",
+        calibration_path=ROOT / "demo" / "calibration" / "sa1" / "cali.json",
     )
     session.session_root = tmp_path / "session"
     session.session_root.mkdir()

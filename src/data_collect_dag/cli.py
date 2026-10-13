@@ -9,7 +9,7 @@ import yaml
 
 from data_collect_dag.app import AppRuntime, build_parser
 from data_collect_dag.config import load_output_config
-from data_collect_dag.demo_templates import export_demo
+from data_collect_dag.demo_templates import DEFAULT_CAR_ID, export_demo
 from data_collect_dag.logging_utils import BACKGROUND_LOG_FILENAME
 from data_collect_dag.storage import clean_sessions
 
@@ -37,17 +37,21 @@ def main() -> int:
     args = parser.parse_args()
     if args.force and args.init_demo is None:
         parser.error("--force requires --init-demo")
+    if args.car_id is not None and args.init_demo is None:
+        parser.error("--car-id requires --init-demo")
     if args.init_demo is not None:
         if args.background:
             parser.error("--init-demo cannot be combined with --background")
         if args.clean is not None:
             parser.error("--init-demo cannot be combined with --clean")
         try:
-            destination = export_demo(args.init_demo, force=args.force)
+            destination = export_demo(args.init_demo, force=args.force, car_id=args.car_id)
         except (OSError, ValueError, yaml.YAMLError) as exc:
             print(f"demo export failed: {exc}", file=sys.stderr)
             return 1
         print(f"demo templates exported to {destination}")
+        config_car = DEFAULT_CAR_ID if args.car_id is None else args.car_id.lower()
+        print(f"calibrations: {'all cars' if args.car_id is None else config_car}; config car: {config_car}")
         print(f"data_collect_dag --config {shlex.quote(str(destination / 'cfg.yaml'))} --pipeline fps_undist")
         return 0
     if args.config is None:

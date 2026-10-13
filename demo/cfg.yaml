@@ -3,7 +3,7 @@ output:
   disk_storage_limit_GB: 100  # Maximum root_dir file size; decimal GB. 0 disables.
   disk_storage_need_GB: 100  # Minimum disk free space checked once per task start.
 calibration:
-  path: demo/calibration/cali.json
+  path: demo/calibration/sa4/cali.json
 ros:
   node_name: data_collect_dag
   control:

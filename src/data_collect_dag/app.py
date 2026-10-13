@@ -166,13 +166,18 @@ def build_parser() -> argparse.ArgumentParser:
         usage=(
             "%(prog)s --config CONFIG [--pipeline PIPELINE] [--background]\n"
             "       %(prog)s --config CONFIG --clean DAY\n"
-            "       %(prog)s --init-demo DIR [--force]"
+            "       %(prog)s --init-demo DIR [--car-id CAR_ID] [--force]"
         ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--config", type=Path, help="YAML configuration file; required for collection and cleanup")
     source.add_argument("--init-demo", type=Path, metavar="DIR", help="export bundled demo templates and exit; no config or ROS needed")
+    parser.add_argument(
+        "--car-id", metavar="CAR_ID",
+        help="export only this car's calibration (case-insensitive); only valid with --init-demo\n"
+             "if omitted, export all cars and use sa4 in the configuration",
+    )
     parser.add_argument("--force", action="store_true", help="overwrite template files; only valid with --init-demo")
     parser.add_argument("--pipeline", default="init", help="pipeline to run (default: init); ignored during cleanup/export")
     mode = parser.add_mutually_exclusive_group()

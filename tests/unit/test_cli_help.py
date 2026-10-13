@@ -25,6 +25,9 @@ def no_cli_work(monkeypatch):
     (["--pipeline", "init"], "--config CONFIG is required to run collection"),
     (["--force"], "--force requires --init-demo"),
     (["--config", "cfg.yaml", "--force"], "--force requires --init-demo"),
+    (["--car-id", "sa4"], "--car-id requires --init-demo"),
+    (["--config", "cfg.yaml", "--car-id", "sa4"], "--car-id requires --init-demo"),
+    (["--config", "cfg.yaml", "--clean", "1", "--car-id", "sa4"], "--car-id requires --init-demo"),
     (["--init-demo", "demo", "--clean", "0"], "--init-demo cannot be combined with --clean"),
     (["--init-demo", "demo", "--background"], "--init-demo cannot be combined with --background"),
 ])
@@ -48,6 +51,7 @@ def test_action_specific_errors(arguments, message, no_cli_work, tmp_path, monke
 
 @pytest.mark.parametrize("arguments,message", [
     (["--clean"], "argument --clean: expected one argument"),
+    (["--init-demo", "demo", "--car-id"], "argument --car-id: expected one argument"),
     (["--config", "cfg.yaml", "--clean", "-1"], "--clean must be a non-negative integer"),
     (["--config", "cfg.yaml", "--clean", "1.5"], "--clean must be a non-negative integer"),
     (["--config", "cfg.yaml", "--init-demo", "demo"], "not allowed with argument --config"),
@@ -71,7 +75,7 @@ def test_help_lists_operation_forms_and_requirements(no_cli_work, monkeypatch, c
     for text in [
         "data_collect_dag --config CONFIG [--pipeline PIPELINE] [--background]",
         "data_collect_dag --config CONFIG --clean DAY",
-        "data_collect_dag --init-demo DIR [--force]",
+        "data_collect_dag --init-demo DIR [--car-id CAR_ID] [--force]",
         "YAML configuration file; required for collection and cleanup",
         "no config or ROS needed",
         "default: init",
@@ -79,5 +83,6 @@ def test_help_lists_operation_forms_and_requirements(no_cli_work, monkeypatch, c
         "0=delete all, 1=keep today, 2=keep today and yesterday",
         "requires --config; stop collection before cleanup",
         "only valid with --init-demo",
+        "if omitted, export all cars and use sa4 in the configuration",
     ]:
         assert text in captured.out

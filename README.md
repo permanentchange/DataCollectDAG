@@ -29,13 +29,21 @@ Alternatively, install the base package directly from GitHub:
 
 ```bash
 python3.8 -m pip install 'git+https://github.com/permanentchange/DataCollectDAG.git'
-data_collect_dag --init-demo ~/dcd-demo
+data_collect_dag --init-demo ~/dcd-demo --car-id sa4
 data_collect_dag --config ~/dcd-demo/cfg.yaml --pipeline fps_undist
 ```
 
-Wheel and source distributions include demo YAML and calibration JSON templates. `--init-demo DIR` exports them offline without starting ROS, and creates a `models/` directory for your own weights. It exports all templates; `--pipeline` does not filter them. Model weights, ROS bags and collection results are not bundled. Review the example calibration, topics and storage settings before collecting on your device.
+Wheel and source distributions include demo YAML and calibration JSON templates. `--init-demo DIR` exports them offline without starting ROS, and creates a `models/` directory for your own weights. Use `--car-id sa4` to export only that car's calibration; car IDs are case-insensitive. Omit `--car-id` to export all available cars with SA4 selected in the configuration. Unknown IDs fail before writing and list the available cars. All demo YAML files are exported; `--pipeline` does not filter them. Model weights, ROS bags and collection results are not bundled. Review the example calibration, topics and storage settings before collecting on your device.
 
-Exported calibration and model references use absolute paths under `DIR`, so you can run from any working directory. Other settings, including `output.root_dir`, stay unchanged. If you move the exported directory, update these paths or export again. `calibration/cali.json` is a regular file containing the default SA4 calibration, not a symlink.
+Calibrations are organized as `calibration/<car-id>/cali.json`, without a top-level default file or symlink. Exported calibration and model references use absolute paths under `DIR`, so you can run from any working directory. For example:
+
+```bash
+data_collect_dag --init-demo ~/dcd-sa14 --car-id sa14
+# cfg.yaml now points to ~/dcd-sa14/calibration/sa14/cali.json as an absolute path
+data_collect_dag --config ~/dcd-sa14/cfg.yaml --pipeline fps_undist
+```
+
+Other settings, including `output.root_dir`, stay unchanged. If you move the exported directory, update these paths or export again.
 
 By default, any existing template filename aborts the export before files are written. After upgrading the package, export to a new directory to compare configurations, or explicitly replace the templates:
 
@@ -43,7 +51,9 @@ By default, any existing template filename aborts the export before files are wr
 data_collect_dag --init-demo ~/dcd-demo --force
 ```
 
-`--force` replaces only bundled template filenames (including any edits you made to them); unrelated files and existing model weights are preserved. Export refuses directory symlinks that lead outside the destination. Package upgrades never change previously exported configurations. Editable installations export the checkout's current demo files; ordinary installations export templates shipped with that package version.
+`--force` replaces only exported template filenames (including any edits you made to them); unrelated files and existing model weights are preserved. Combine it with `--car-id` to switch the configuration's car without replacing or removing other cars' calibration files. Export refuses directory symlinks that lead outside the destination. Package upgrades never change previously exported configurations. Editable installations export the checkout's current demo files; ordinary installations export templates shipped with that package version.
+
+The old `calibration/saN_cali.json` and `calibration/cali.json` paths have been replaced by `calibration/saN/cali.json`. Update external YAML references or export into a new directory. Re-exporting with `--force` updates the configuration but does not delete old-layout files from an existing directory.
 
 ### Optional inference and tools
 
@@ -85,7 +95,7 @@ data_collect_dag --config demo/cfg.yaml --pipeline fps_undist
 data_collect_dag --config demo/cfg.yaml --pipeline fps_with_yolo
 ```
 
-The CLI also supports `python -m data_collect_dag --config ... --pipeline ...`. Choose either `--config` to run/clean or `--init-demo DIR` to export; `--pipeline` defaults to `init`. Export cannot be combined with `--config`, `--clean` or `--background`; `--force` is only valid for export.
+The CLI also supports `python -m data_collect_dag --config ... --pipeline ...`. Choose either `--config` to run/clean or `--init-demo DIR [--car-id CAR_ID]` to export; `--pipeline` defaults to `init`. Export cannot be combined with `--config`, `--clean` or `--background`; `--force` and `--car-id` are only valid for export.
 
 `data_collect_dag --help` lists collection, cleanup and export as separate command forms. Collection (including `--background`) and cleanup require a YAML file via `--config`; export does not. For example, `data_collect_dag --clean 1` reports `--clean requires --config CONFIG to determine output.root_dir`. No configuration or cleanup directory is selected automatically.
 
@@ -127,7 +137,7 @@ Available sample pipelines:
 | `demo/cfg.yaml` | `init`, `fps`, `fps_undist`, `compare_motion` | No |
 | `demo/cfg.yaml` | `fps_with_yolo` | YOLO |
 
-The checkout's demo YAML references `demo/calibration/cali.json`. Its YOLO pipeline references `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself (or put it in `<export-dir>/models/` for an exported configuration):
+The checkout's demo YAML references `demo/calibration/sa4/cali.json`. Its YOLO pipeline references `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself (or put it in `<export-dir>/models/` for an exported configuration):
 
 ```bash
 mkdir -p demo/models

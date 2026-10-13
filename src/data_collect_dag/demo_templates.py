@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import tempfile
 from importlib import resources
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from zipfile import ZipFile
 
 import yaml
+
+
+DEFAULT_CAR_ID = "sa4"
 
 
 def read_templates() -> Dict[str, bytes]:
@@ -20,7 +24,7 @@ def read_templates() -> Dict[str, bytes]:
     if module_path.parent.parent.name == "src" and (checkout / "pyproject.toml").is_file() and demo.is_dir():
         # Editable installs use live templates, rather than a stale build artifact.
         assets = sorted(list(demo.glob("*.yaml")) + list(demo.glob("*.yml"))
-                        + list((demo / "calibration").glob("*.json")))
+                        + list((demo / "calibration").rglob("*.json")))
         return {asset.relative_to(demo).as_posix(): asset.read_bytes() for asset in assets}
     with ZipFile(io.BytesIO(resources.read_binary("data_collect_dag", "_demo.zip"))) as bundle:
         return {name: bundle.read(name) for name in bundle.namelist()}
@@ -35,13 +39,23 @@ def _demo_path(value: Any, destination: Path) -> Any:
     return value
 
 
-def _rewrite_config(payload: bytes, destination: Path) -> bytes:
+def available_car_ids(templates: Dict[str, bytes]) -> List[str]:
+    cars = set()
+    for name in templates:
+        parts = Path(name).parts
+        if (len(parts) == 3 and parts[0] == "calibration" and parts[2] == "cali.json"
+                and re.fullmatch(r"[a-z0-9][a-z0-9_-]*", parts[1])):
+            cars.add(parts[1])
+    return sorted(cars)
+
+
+def _rewrite_config(payload: bytes, destination: Path, car_id: str) -> bytes:
     config = yaml.safe_load(payload)
     if not isinstance(config, dict):
         raise ValueError("demo configuration must be a YAML mapping")
     calibration = config.get("calibration")
     if isinstance(calibration, dict) and "path" in calibration:
-        calibration["path"] = _demo_path(calibration["path"], destination)
+        calibration["path"] = str(destination / "calibration" / car_id / "cali.json")
 
     def rewrite_models(value: Any) -> None:
         if isinstance(value, dict):
@@ -73,23 +87,32 @@ def _check_directory(directory: Path, destination: Path) -> None:
             raise ValueError(f"dangling directory symlink: {ancestor}")
 
 
-def export_demo(destination: Path, force: bool = False) -> Path:
+def export_demo(destination: Path, force: bool = False, car_id: Optional[str] = None) -> Path:
     destination = destination.expanduser().resolve()
     templates = read_templates()
     if not templates:
         raise ValueError("no demo templates found")
+    cars = available_car_ids(templates)
+    config_car = DEFAULT_CAR_ID if car_id is None else car_id.lower()
+    if config_car not in cars:
+        raise ValueError(f"unknown car ID {config_car!r}; available car IDs: {', '.join(cars) or '(none)'}")
     files: Dict[Path, bytes] = {}
     for name, payload in templates.items():
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
             raise ValueError(f"unsafe demo template path: {name}")
+        if relative.parts[0] == "calibration":
+            if len(relative.parts) < 3 or relative.parts[1] not in cars:
+                continue
+            if car_id is not None and relative.parts[1] != config_car:
+                continue
         target = destination / relative
         _check_directory(target.parent, destination)
         if target.is_dir() and not target.is_symlink():
             raise ValueError(f"template destination is a directory: {target}")
         if not force and (target.exists() or target.is_symlink()):
             raise ValueError(f"demo template already exists: {target}; choose another directory or use --force")
-        files[target] = _rewrite_config(payload, destination) if relative.suffix in {".yaml", ".yml"} else payload
+        files[target] = _rewrite_config(payload, destination, config_car) if relative.suffix in {".yaml", ".yml"} else payload
     models = destination / "models"
     _check_directory(models, destination)
 
