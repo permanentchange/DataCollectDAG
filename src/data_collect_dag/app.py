@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import signal
@@ -9,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+from data_collect_dag.cli import build_parser
 from data_collect_dag.camera_calibration import read_distortion_params
 from data_collect_dag.config import load_app_config
 from data_collect_dag.control import ControlCommand, ControlCommandQueue
@@ -158,46 +158,3 @@ class AppRuntime:
                 self._control_stop_event.set()
             return
         raise ValueError(f"unknown control command: {command.kind}")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Data collection DAG runtime and demo utilities",
-        usage=(
-            "%(prog)s --config CONFIG [--pipeline PIPELINE] [--background]\n"
-            "       %(prog)s --config CONFIG --clean DAY\n"
-            "       %(prog)s --init-demo DIR [--car-id CAR_ID] [--force]"
-        ),
-        formatter_class=argparse.RawTextHelpFormatter,
-    )
-    source = parser.add_mutually_exclusive_group()
-    source.add_argument("--config", type=Path, help="YAML configuration file; required for collection and cleanup")
-    source.add_argument("--init-demo", type=Path, metavar="DIR", help="export bundled demo templates and exit; no config or ROS needed")
-    parser.add_argument(
-        "--car-id", metavar="CAR_ID",
-        help="export only this car's calibration (case-insensitive); only valid with --init-demo\n"
-             "if omitted, export all cars and use sa4 in the configuration",
-    )
-    parser.add_argument("--force", action="store_true", help="overwrite template files; only valid with --init-demo")
-    parser.add_argument("--pipeline", default="init", help="pipeline to run (default: init); ignored during cleanup/export")
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--clean", type=_nonnegative_days, metavar="DAY",
-        help=(
-            "clean sessions under output.root_dir and exit:\n"
-            "0=delete all, 1=keep today, 2=keep today and yesterday\n"
-            "requires --config; stop collection before cleanup"
-        ),
-    )
-    mode.add_argument("--background", action="store_true", help="run collection in the background; requires --config; print PID and log path")
-    return parser
-
-
-def _nonnegative_days(value: str) -> int:
-    try:
-        days = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError("--clean must be a non-negative integer")
-    if days < 0:
-        raise argparse.ArgumentTypeError("--clean must be a non-negative integer")
-    return days

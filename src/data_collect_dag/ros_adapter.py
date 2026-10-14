@@ -10,6 +10,7 @@ from http.client import HTTPConnection
 from typing import Any, Callable, Dict, List, Optional, Sequence
 from xmlrpc.client import ServerProxy, Transport
 
+from data_collect_dag.instance_guard import resolve_node_name
 from data_collect_dag.models import FrameLike, StatusSnapshot, TopicConfig
 from data_collect_dag.ros_messages import (
     frame_from_ros_message,
@@ -107,7 +108,11 @@ class RosAdapter:
         self._rospy = rospy
         if not rospy.core.is_initialized():
             self._wait_for_ros_master()
-            rospy.init_node(self._ros_node_name, anonymous=False, disable_signals=True)
+            node_name = resolve_node_name(self._ros_node_name)
+            # rospy requires a base name here; __name supplies the full name
+            # used by the instance lock, including an explicit YAML namespace.
+            rospy.init_node(node_name.rsplit("/", 1)[-1], argv=[sys.argv[0], "__name:=" + node_name],
+                            anonymous=False, disable_signals=True)
         self._logger.info("starting ROS adapter node=%s subscribed_topics=%s", self._ros_node_name, sorted(self._topics))
         resolved_message_classes = self._resolve_topic_message_classes()
         self._subscribers = []

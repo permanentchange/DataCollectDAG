@@ -12,8 +12,10 @@ def no_cli_work(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("help and invalid arguments must not perform any work")
 
-    for name in ["AppRuntime", "load_output_config", "clean_sessions", "start_background", "export_demo"]:
-        monkeypatch.setattr("data_collect_dag.cli." + name, forbidden)
+    for name in ["data_collect_dag.app.AppRuntime", "data_collect_dag.config.load_output_config",
+                 "data_collect_dag.storage.clean_sessions", "data_collect_dag.cli.start_background",
+                 "data_collect_dag.demo_templates.export_demo", "data_collect_dag.cli.load_node_name"]:
+        monkeypatch.setattr(name, forbidden)
 
 
 @pytest.mark.parametrize("arguments,message", [

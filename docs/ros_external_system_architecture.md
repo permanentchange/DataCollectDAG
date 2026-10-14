@@ -1,6 +1,6 @@
 # ROS1 外部控制接口
 
-DataCollectDAG 在 ROS1 Noetic 中作为一个 ROS node 运行。外部系统通过 `std_msgs/String` topic 发送 JSON 控制命令、订阅 JSON 状态；采集结果由文件系统交付。相关实现位于 `src/data_collect_dag/ros_adapter.py`、`app.py`、`session.py` 和 `status.py`。
+DataCollectDAG 在 ROS1 Noetic 中作为一个 ROS node 运行。外部系统通过 `std_msgs/String` topic 发送 JSON 控制命令、订阅 JSON 状态；采集结果由文件系统交付。服务端由 `ros_adapter.py`、`app.py`、`session.py` 和 `status.py` 实现；CLI 客户端位于 `ros_control_client.py`。
 
 ## 接口配置
 
@@ -19,9 +19,9 @@ ros:
 | 输入 | `/data_collect/control` | `std_msgs/String` | 接收控制命令（JSON 位于 `data`） |
 | 输出 | `/data_collect/status` | `std_msgs/String` | 周期发布状态（JSON 位于 `data`） |
 
-这些名称来自 YAML，不是硬编码的强制值。`ros.control` 还可选填 `start_service`、`stop_service`、`status_service`（均为 `std_srvs/Trigger`）；未配置则不会注册。未知控制配置字段会被拒绝。
+服务端 topic 名称由 YAML 指定；省略接口字段时不注册对应接口。CLI 的默认名称与 demo 一致，自定义名称通过 CLI 参数指定。`ros.control` 还可选填 `start_service`、`stop_service`、`status_service`（均为 `std_srvs/Trigger`）；未配置则不会注册。未知控制配置字段会被拒绝。
 
-`start_service` 没有参数，启动 **CLI 最初指定的 pipeline**；如果要切换到其他 pipeline，应使用控制 topic。`stop_service` 的 `message` 为 `stopping`，`start_service` 的 `message` 为 `starting`；它们只表示命令已进入控制队列，不代表执行成功。`status_service` 的 `message` 为当前状态 JSON。
+`start_service` 没有参数，用于启动程序启动时选择的 pipeline；如果要切换到其他 pipeline，应使用控制 topic。`stop_service` 的 `message` 为 `stopping`，`start_service` 的 `message` 为 `starting`；它们只表示命令已进入控制队列，不代表执行成功。`status_service` 的 `message` 为当前状态 JSON。
 
 ## 控制命令
 
@@ -29,7 +29,7 @@ ros:
 
 | 命令 | JSON 内容 | 行为 |
 | --- | --- | --- |
-| 启动/替换 | `{"command":"start","pipeline":"fps"}` | 启动配置中存在的 pipeline；若已有 session，先结束旧 session |
+| 启动/替换 | `{"command":"start","pipeline":"fps"}` | 先验证名称，再停止活动 session 并启动目标 pipeline |
 | 暂停 | `{"command":"pause"}` | 暂停接收新帧及新样本执行 |
 | 恢复 | `{"command":"resume"}` | 恢复暂停的 session |
 | 停止 | `{"command":"stop"}` | 停止活动 session，程序继续运行，可再次 start |
@@ -37,21 +37,47 @@ ros:
 
 `command` 必须为小写；`start` 的 `pipeline` 必须是非空字符串。非法 JSON、未知命令、缺失 pipeline 会被忽略并记录 warning，不会直接修改 `last_error`。合法命令执行失败时，错误信息写入 status 的 `last_error`。
 
-如果收到 `start` 时已经存在活动 session，会**先结束当前 session，再验证目标 pipeline**。因此目标名称错误时，旧 session 仍然会被停止，工具随后保持 `IDLE`。
+收到 `start` 时先验证目标 pipeline 名称，存在才结束当前 session 并启动新 session。目标不存在时记录 `last_error`，保留活动 session 的运行或暂停状态及 session id，计数不重置。目标存在但初始化失败时，原 session 已结束，工具进入 `IDLE` 并报告错误。
 
-命令示例（根据实际 YAML 调整 topic 和 pipeline）：
+CLI 可直接复用这些 topic，无需配置文件；默认 `/data_collect/control` 和 `/data_collect/status`，可用 `--control-topic TOPIC`、`--status-topic TOPIC` 覆盖：
+
+```bash
+data_collect_dag start fps
+data_collect_dag pause
+data_collect_dag resume
+data_collect_dag stop
+data_collect_dag status
+data_collect_dag shutdown
+```
+
+客户端使用独立匿名 ROS 节点，不加载采集配置、标定、DAG 或推理模型。发送命令前检查 Master 并等待控制订阅者；`status` 等待状态消息及活动发布连接。`--timeout SEC` 为有限正数，默认 5 秒，分别用于 Master 检查和 topic 连接/消息等待。超时、无目标接口或检测到发送失败时返回非零。
+
+控制命令成功退出表示消息已发布；应用通过控制队列异步执行。`status` 读取一条现有状态 JSON，展示状态、pipeline、session、保存/跳过/失败计数、磁盘空闲空间及最近错误。例如下方 JSON 对应：
+
+```text
+State:       RUNNING
+Pipeline:    fps
+Session:     20261014_120000_abcd1234
+Saved:       20
+Skipped:     2
+Failed:      0
+Disk Free:   120.5 GB
+Last Error:  None
+```
+
+也可直接使用 ROS 工具发送相同 JSON：
 
 ```bash
 rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"start\",\"pipeline\":\"fps\"}'"
-rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"pause\"}'"
-rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"resume\"}'"
-rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"stop\"}'"
-rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"shutdown\"}'"
 ```
 
-采集 CLI 在 ROS adapter 启动后自动提交一次 `start`，默认 pipeline 为 `init`。它不会因某次 start 或节点初始化失败而自动退出；可以检查状态并发送新的 `start`。收到 `SIGINT`/`SIGTERM` 或 ROS `shutdown` 时，应用通过控制队列执行停止与清理并退出；正常收尾时，ROS shutdown 的摘要 `end_reason` 为 `external_shutdown`，信号退出为 `signal_<信号编号>`，最终状态为 `STOPPED`。shutdown 不需要 pipeline 参数，对前台、`--background` 后台、暂停或无活动 session 的程序均有效。退出后停止发布 status。`--init-demo` 和 `--clean` 不创建这些 ROS 接口。
+## 生命周期与退出
 
-`pause` / `resume` / `stop` 在没有活动 session 时不启动采集。暂停不会强制中断已经执行的节点；`stop` 或 `shutdown` 会请求取消并执行收尾。节点线程池退出仍等待已提交任务，`runtime.stop_timeout_sec` 不是整个退出流程的总时限；收尾失败会报告 `FAILED` 和具体错误。
+采集程序获取本机实例锁后，加载配置和标定并启动 ROS 接口，再自动提交一次 `start`，默认 pipeline 为 `init`。锁按完整 `ros.node_name` 生成，前后台共用，`IDLE` 时也被持有；进程退出后释放。不同配置或输出目录不能绕过同名锁；完整流程见 [运行架构](architecture.md#1-运行路径)。
+
+`pause`、`resume` 和 `stop` 在没有活动 session 时不启动采集。暂停阻止接收新帧及启动新样本；在途节点继续执行。`stop` 结束 session，保留程序及 ROS 控制接口。完成条件触发或 Pipeline 启动失败也保留程序，允许查询状态或重新 `start`。
+
+`shutdown` 停止活动 session、保存摘要并退出整个程序。SIGINT/SIGTERM 通过同一控制队列收尾。正常收尾的摘要为 `STOPPED`，`end_reason` 分别为 `external_shutdown` 或 `signal_<信号编号>`；无活动 session 时直接退出。停止过程的节点线程池等待已提交任务，`runtime.stop_timeout_sec` 用于部分线程等待，并非整个退出流程的总时限。收尾失败记录 `FAILED` 和具体错误。退出后停止发布 status。
 
 ## 状态消息
 
@@ -61,15 +87,15 @@ rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"shu
 rostopic echo /data_collect/status
 ```
 
-JSON 示例（省略部分空计数项的含义与空对象相同）：
+完整状态 JSON 示例：
 
 ```json
 {
   "tool_state": "RUNNING",
   "recent_session_status": null,
-  "current_session_id": "20261013_090000_abcdef12",
+  "current_session_id": "20261014_120000_abcd1234",
   "current_pipeline_name": "fps",
-  "start_time": "2026-10-13T09:00:00.123456789",
+  "start_time": "2026-10-14T12:00:00.123456789",
   "disk_free_gb": 120.5,
   "output_size_gb": 25.3,
   "disk_storage_limit_gb": 100.0,
@@ -100,24 +126,26 @@ JSON 示例（省略部分空计数项的含义与空对象相同）：
 | `disk_storage_limit_gb`、`disk_storage_need_gb` | 配置的目录容量上限和启动空闲空间门槛；关闭时为 `null` |
 | `last_error` | 最近一次控制或运行错误 |
 | `warnings` | 警告计数 |
-| `received_messages` | 每个 `topic_key` 的接收数量 |
+| `received_messages` | 活动 session 接入的每个 `topic_key` 的消息数量；暂停或未绑定 session 时不计入 |
 | `main_frame_events` | 已进入主帧队列的事件数 |
 | `samples_saved`、`samples_skipped`、`samples_failed`、`samples_canceled` | 样本计数 |
 | `drop_reasons`、`skip_reasons`、`fail_reasons` | 按原因归类的计数 |
 
-`RUNNING`、`PAUSED` 是活动状态；`STOPPED`、`COMPLETED`、`FAILED` 属于最近 session 的最终结果。状态切换至 `IDLE` 后，当前 session 的三个字段被清空，计数仍保留到下一次成功启动。成功启动重置计数和 `last_error`，但 `recent_session_status` 保留最近结束结果；不能据此字段单独判断当前是否运行。`start_time` 使用本机时间。状态 topic 会向新订阅者发送最近一条 latched 消息；不能单凭发布命令成功或一条缓存状态判断命令已执行，应等待活动状态/session id 变化并检查 `last_error`。
+`RUNNING`、`PAUSED` 是活动状态；`STOPPED`、`COMPLETED`、`FAILED` 属于最近 session 的最终结果。状态切换至 `IDLE` 后，当前 session 的三个字段被清空，计数仍保留到下一次成功启动。成功启动重置计数和 `last_error`，但 `recent_session_status` 保留最近结束结果；不能据此字段单独判断当前是否运行。`start_time` 为 session 构造时的本机时间。状态 topic 会向新订阅者发送最近一条 latched 消息；不能单凭发布命令成功或一条缓存状态判断命令已执行，应等待活动状态/session id 变化并检查 `last_error`。
 
-容量字段使用十进制 GB；`disk_free_gb`、`output_size_gb` 展示值保留两位小数，配置门槛保留配置数值，限额比较使用未舍入的字节数。启动时目录达到上限或空闲空间不足，将保持 `IDLE` 并报告 `FAILED`，不创建会话目录或该会话的摘要。`last_error` 以 `storage_limit_reached`、`insufficient_disk_space` 或 `storage_check_failed` 标识原因，并包含路径和容量或查询错误。
+容量字段使用十进制 GB；`disk_free_gb` 和 `output_size_gb` 保留两位小数，配置门槛保留配置数值。`output_size_gb` 使用缓存，状态查询不扫描输出目录。容量检查规则见 [YAML 配置](architecture.md#2-yaml-配置)。
 
-运行中达到目录容量上限或检查失败后，停止新样本并等待在途样本完成，随后进入 `IDLE` / `FAILED`；摘要 `end_reason` 为 `storage_limit_reached` 或 `storage_check_failed`。在途数据及收尾文件可能造成少量超额。ROS 控制和 status 发布继续工作，释放空间后可显式发送 `start` 重新检查；不会自动恢复。`disk_storage_need_GB` 仅在每次新任务开始时检查，运行中和暂停恢复不作为停止条件。
+容量拒绝启动时保持 `IDLE`，最近结果为 `FAILED`，不创建该会话目录。运行中达到容量上限或检查失败时，停止新样本并收尾，进入 `IDLE` / `FAILED`。错误使用 `storage_limit_reached`、`insufficient_disk_space` 或 `storage_check_failed` 标识；运行中失败的摘要也记录对应 `end_reason`。释放空间后可显式 `start` 重试。
 
 ## 启动前置检查与错误边界
 
-配置的每个 `ros.topics` 在 adapter 启动时都要能解析成 ROS message class，包括自定义消息包。先安装 ROS Noetic 和对应 catkin package，并正确 `source` ROS 工作空间；默认 ROS master 地址为 `http://localhost:11311`，代码最多等待约 5 秒。
+配置的每个 `ros.topics` 在 adapter 启动时都要能解析成 ROS message class，包括自定义消息包。先安装 ROS Noetic 和对应 catkin package，并正确 `source` ROS 工作空间；ROS master 地址由 `ROS_MASTER_URI` 指定，默认 `http://localhost:11311`，采集启动时的 Master 探测等待约 5 秒。
 
 当 pipeline 同时配置 `topics` 和 `time_delay_ms` 时，每次 session 启动前都会检查这些 topic 是否在指定毫秒内各收到一条新消息。超时后本次 session 启动失败，`last_error` 会包含缺失的 topic。没有配置这两个字段时，跳过该检查。
 
-**注意：** YAML 解析、标定 JSON 加载、ROS master 连接和 ROS message class 解析发生在状态接口就绪之前。此阶段的失败要通过进程日志诊断，不能依赖 `status_topic`。
+实例锁获取、YAML 解析、标定加载、Master 连接和 message class 解析发生在状态接口就绪之前；失败时启动进程返回非零，通过终端输出或后台日志诊断。后台父进程的零退出码及 PID 只表示子进程已创建。
+
+ROS 接口就绪后的 Pipeline 容量检查、topic 预检查和节点初始化错误通过 `last_error` 及进程日志报告；进程继续接受控制。`--init-demo` 和 `--clean` 不启动 ROS 接口。
 
 ## 读取输出
 

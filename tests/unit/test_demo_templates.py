@@ -149,7 +149,7 @@ def test_cli_exports_without_runtime_and_reports_conflicts(tmp_path, monkeypatch
     destination = tmp_path / "demo"
     def forbidden(*args, **kwargs):
         raise AssertionError("export must not construct the runtime")
-    monkeypatch.setattr("data_collect_dag.cli.AppRuntime", forbidden)
+    monkeypatch.setattr("data_collect_dag.app.AppRuntime", forbidden)
     monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--init-demo", str(destination), "--pipeline", "fps"])
     assert main() == 0
     printed = capsys.readouterr().out
@@ -254,7 +254,7 @@ def test_force_replaces_selected_calibration_symlink_not_its_target(tmp_path):
 def test_cli_selected_car_and_unknown_car_report_without_runtime(tmp_path, monkeypatch, capsys):
     def forbidden(*args, **kwargs):
         raise AssertionError("export must not construct a runtime")
-    monkeypatch.setattr("data_collect_dag.cli.AppRuntime", forbidden)
+    monkeypatch.setattr("data_collect_dag.app.AppRuntime", forbidden)
     destination = tmp_path / "demo"
     monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--init-demo", str(destination), "--car-id", "SA14"])
     assert main() == 0

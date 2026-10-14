@@ -725,10 +725,10 @@ class SessionManager:
         self.logger = logging.getLogger("data_collect_dag.session_manager")
 
     def start(self, pipeline_name: str) -> SessionRuntime:
-        if self.active_session is not None:
-            self.stop(reason="replaced_by_new_start", status=RecentSessionStatus.STOPPED)
         if pipeline_name not in self.app_config.pipelines:
             raise KeyError(f"unknown pipeline: {pipeline_name}")
+        if self.active_session is not None:
+            self.stop(reason="replaced_by_new_start", status=RecentSessionStatus.STOPPED)
         self.logger.info("starting session for pipeline=%s", pipeline_name)
         session = SessionRuntime(
             app_config=self.app_config,

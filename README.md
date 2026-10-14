@@ -1,205 +1,186 @@
 # DataCollectDAG
 
-DataCollectDAG is a Python 3.8 / ROS1 Noetic application for collecting sensor data with YAML-defined directed acyclic graphs (DAGs). It subscribes to configured ROS topics, synchronizes frames, runs processing nodes, and writes session results to disk.
+DataCollectDAG is a Python 3.8 / ROS1 Noetic application for collecting sensor data with YAML-defined directed acyclic graphs (DAGs). It synchronizes ROS messages, runs processing nodes and writes session results to disk. Each instance runs at most one pipeline at a time.
 
 ## Requirements
 
-- Python 3.8 (`>=3.8,<3.9`), and Git for installation from a Git URL.
-- For acquisition: Ubuntu with ROS1 Noetic, a running ROS master, and ROS message packages referenced by the YAML, including custom packages such as `bdstar` and `igv_msgs`. Build them in a catkin workspace and source its setup script.
-- The calibration JSON and live ROS topics required by the selected pipeline. A ROS bag may be used for playback but is **not included** in this repository.
+- Linux, Python 3.8 (`>=3.8,<3.9`) and ROS1 Noetic for startup and control.
+- A running ROS master and the message packages referenced by the YAML. Build custom packages such as `bdstar` and `igv_msgs` in a catkin workspace and source its setup script.
+- Readable calibration JSON and the live topics required by the selected pipeline. Bags, model weights and vehicle source files are external resources.
 
-The base Python package installs NumPy, PyYAML, Pillow, OpenCV and rospkg. It does **not** depend on Ultralytics, PyTorch, Torchvision, ONNX or ONNX Runtime. Inference libraries are imported only when an inference node is initialized.
-
-Template export and cleanup need no ROS master. The Python package does not supply ROS installations, custom message packages, model weights or ROS bags.
+The base package depends on NumPy, PyYAML, Pillow, OpenCV and rospkg. Inference packages are optional and loaded when a YOLO node is initialized. Template export and cleanup run without a ROS master.
 
 ## Install
 
-From a repository checkout:
+On Ubuntu with system Python 3.8, from the repository root:
 
 ```bash
 source /opt/ros/noetic/setup.bash
-# If your YAML uses custom ROS messages:
+# Source this too when using custom ROS messages:
 source /path/to/catkin_ws/devel/setup.bash
-
-python3.8 -m venv --system-site-packages .venv
-source .venv/bin/activate
-python -m pip install -e .
+/usr/bin/python3 --version
+/usr/bin/python3 -m pip install -e .
 data_collect_dag --help
 ```
 
-Alternatively, install the base package directly from GitHub or Gitee:
+Use the same Python environment for installation and execution. A virtual environment created with `/usr/bin/python3 -m venv --system-site-packages .venv` can also access system ROS dependencies. The build backend requires `setuptools>=68` and `wheel`; pip normally supplies these in its isolated build environment. For offline builds with `--no-build-isolation`, prepare them in the selected Python environment first.
+
+Installation from Git requires Git:
 
 ```bash
-python3.8 -m pip install --upgrade 'git+https://github.com/permanentchange/DataCollectDAG.git@main'
-# Alternative source:
-# python3.8 -m pip install --upgrade 'git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
-data_collect_dag --init-demo ~/dcd-demo --car-id sa4
-data_collect_dag --config ~/dcd-demo/cfg.yaml --pipeline fps_undist
+/usr/bin/python3 -m pip install --upgrade 'git+https://github.com/permanentchange/DataCollectDAG.git@main'
+# Alternative repository:
+# /usr/bin/python3 -m pip install --upgrade 'git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
+/usr/bin/python3 -m pip show data-collect-dag
 ```
-
-Use the same `pip install --upgrade` command when updating an existing installation. Release versions are declared in `pyproject.toml` and package `__version__`, and must be advanced together when publishing changed code. Updating the package does not change previously exported configurations; export templates separately when needed. To check the installed version:
-
-```bash
-python3.8 -m pip show data-collect-dag
-```
-
-Wheel and source distributions include demo YAML and calibration JSON templates. `--init-demo DIR` exports them offline without starting ROS, and creates a `models/` directory for your own weights. Use `--car-id sa4` to export only that car's calibration; car IDs are case-insensitive. Omit `--car-id` to export all available cars with SA4 selected in the configuration. Unknown IDs fail before writing and list the available cars. All demo YAML files are exported; `--pipeline` does not filter them. Model weights, ROS bags and collection results are not bundled. Review the example calibration, topics and storage settings before collecting on your device.
-
-Calibrations are organized as `calibration/<car-id>/cali.json`, without a top-level default file or symlink. Exported calibration and model references use absolute paths under `DIR`, so you can run from any working directory. For example:
-
-```bash
-data_collect_dag --init-demo ~/dcd-sa14 --car-id sa14
-# cfg.yaml now points to ~/dcd-sa14/calibration/sa14/cali.json as an absolute path
-data_collect_dag --config ~/dcd-sa14/cfg.yaml --pipeline fps_undist
-```
-
-Other settings, including `output.root_dir`, stay unchanged. If you move the exported directory, update these paths or export again.
-
-By default, any existing template filename aborts the export before files are written. After upgrading the package, export to a new directory to compare configurations, or explicitly replace the templates:
-
-```bash
-data_collect_dag --init-demo ~/dcd-demo --force
-```
-
-`--force` replaces only exported template filenames (including any edits you made to them); unrelated files and existing model weights are preserved. Combine it with `--car-id` to switch the configuration's car without replacing or removing other cars' calibration files. Export refuses directory symlinks that lead outside the destination. Package upgrades never change previously exported configurations. Editable installations export the checkout's current demo files; ordinary installations export templates shipped with that package version.
 
 ### Optional inference and tools
 
-In a checkout, install only the extras you need:
-
 | Extra | Purpose |
 | --- | --- |
-| `yolo` | Ultralytics inference, including its transitive PyTorch requirements |
-| `yolo-export` | Ultralytics export dependencies |
+| `yolo` | Ultralytics inference, including its PyTorch requirements |
+| `yolo-export` | Ultralytics model export dependencies |
 | `onnx-cpu` | ONNX and CPU ONNX Runtime |
 | `onnx-gpu` | ONNX and GPU ONNX Runtime |
-| `tools` | Open3D and tqdm for standalone scripts in `tools/` |
+| `tools` | Open3D and tqdm for standalone tools |
 | `test` | pytest |
 
 ```bash
-python -m pip install -e '.[yolo]'
-# Or, for a remote installation:
-python3.8 -m pip install --upgrade 'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git@main'
+/usr/bin/python3 -m pip install -e '.[yolo]'
 ```
 
-`onnx-cpu` and `onnx-gpu` are alternative environments; do not install both ONNX Runtime distributions together. The project does **not** implement an independent ONNX DAG node: YOLO inference, including an ONNX model loaded through Ultralytics, uses the `yolo_gate` node.
+Choose one ONNX Runtime extra for the target device. ONNX models run through Ultralytics in the `yolo_gate` node.
 
-`setup.bash` installs from a checkout. Its modes are `base` (default), `yolo`, `cpu`, `gpu`, `arm`, `onnx-cpu` and `onnx-gpu`. The `cpu` and `gpu` modes install the same Ultralytics distribution; the model's runtime `device` setting selects the device.
+`bash setup.bash [base|yolo|cpu|gpu|arm|onnx-cpu|onnx-gpu]` installs from the checkout using `python` on `PATH`, which must be Python 3.8. `base` is the default; `yolo`, `cpu` and `gpu` install the YOLO extra. The node's `device` setting selects the inference device.
 
-**Jetson/ARM:** `bash setup.bash arm` explicitly reinstalls `torch` and `torchvision` from `~/wheels` before installing the YOLO extra. Both wheel files must exist before any uninstall; afterward the Ultralytics resolver is constrained to those installed versions. The script recognizes one local wheel per package or its built-in preferred Jetson filenames. Use `DCD_WHEEL_DIR`, `DCD_TORCH_WHEEL` and `DCD_TORCHVISION_WHEEL` to select a different compatible pair. Confirm the wheel versions match the device's JetPack, CUDA and Python environment. For non-inference workflows use `bash setup.bash base`.
+For Jetson YOLO installations, `bash setup.bash arm` reinstalls device-compatible `torch` and `torchvision` wheels from `~/wheels`, then installs the YOLO extra with those versions constrained. Both wheels must exist before uninstalling packages. The script selects its preferred filenames or a single wheel per package. Set `DCD_WHEEL_DIR`, `DCD_TORCH_WHEEL` and `DCD_TORCHVISION_WHEEL` to choose specific compatible builds. Match Python, JetPack and CUDA to the device.
 
-## Run a pipeline
+## Export a demo
 
-Start `roscore` in a separate terminal; source ROS and your Python environment in the terminal running the CLI. From the repository root:
+Wheel and source distributions bundle demo YAML and vehicle calibration JSON. Export them to a working directory:
 
 ```bash
-# No YOLO/PyTorch required
-data_collect_dag --config demo/cfg.yaml --pipeline fps
-
-# Original images, with dist_model and dist_coeffs in each camera JSON
-data_collect_dag --config demo/cfg.yaml --pipeline fps_undist
-
-# YOLO and model weights required
-data_collect_dag --config demo/cfg.yaml --pipeline fps_with_yolo
+data_collect_dag --init-demo ~/dcd-demo --car-id sa4
 ```
 
-The CLI also supports `python3.8 -m data_collect_dag` with the same arguments:
+Car IDs are case-insensitive. Omitting `--car-id` exports all available calibrations and selects SA4 in the YAML. Unknown IDs fail before writing and list the available cars. The export includes all bundled YAML files, the selected `calibration/<car-id>/cali.json` files and a `models/` directory for your weights. Calibration paths and `demo/` model references in exported YAML are absolute; `output.root_dir` and other settings retain their configured values.
 
-```text
-data_collect_dag --config CONFIG [--pipeline PIPELINE] [--background]
-data_collect_dag --config CONFIG --clean DAY
-data_collect_dag --init-demo DIR [--car-id CAR_ID] [--force]
-```
-
-`--pipeline` defaults to `init`. Export cannot be combined with `--config`, `--clean` or `--background`; `--force` and `--car-id` are only valid for export.
-
-`data_collect_dag --help` lists collection, cleanup and export as separate command forms. Collection (including `--background`) and cleanup require a YAML file via `--config`; export does not. For example, `data_collect_dag --clean 1` reports `--clean requires --config CONFIG to determine output.root_dir`. No configuration or cleanup directory is selected automatically.
-
-To run in the background and keep running after closing the terminal:
+Existing template filenames require `--force`:
 
 ```bash
+data_collect_dag --init-demo ~/dcd-demo --car-id sa14 --force
+```
+
+`--force` replaces exported template files and preserves unrelated files, other car directories and model weights. Directory symlinks escaping the destination are rejected. Editable installations export the checkout's demo files; ordinary installations export packaged templates. Review topics, calibration and storage settings before collecting. If you move the export directory, update its absolute references or export again.
+
+## Start and control
+
+Start `roscore` in a separate ROS-enabled terminal. Source ROS and any custom message workspace in both the startup and control terminals. From the repository root:
+
+```bash
+# Start with the default init pipeline:
+data_collect_dag --config demo/cfg.yaml
+# Or start a collection pipeline in the background:
 data_collect_dag --config demo/cfg.yaml --pipeline fps_undist --background
 tail -f ~/DATA_COLLECT/background.log
 ```
 
-`--background` immediately prints the process PID and log path, then returns. It inherits the current Python environment, ROS environment and working directory. stdout/stderr append to `<output.root_dir>/background.log`, which counts toward the storage limit. The PID confirms process creation; check the log and status for successful collection. Background mode and `--clean` are mutually exclusive. There is no automatic restart or startup on boot.
+The CLI supports these forms, also available through `/usr/bin/python3 -m data_collect_dag`:
 
-To stop the entire program, in either foreground or background mode:
-
-```bash
-rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"shutdown\"}'"
-# Alternatively, using the PID printed by --background:
-kill -TERM PID
+```text
+data_collect_dag --config CONFIG [--pipeline PIPELINE] [--background]
+data_collect_dag start PIPELINE [--control-topic TOPIC] [--timeout SEC]
+data_collect_dag {pause,resume,stop,shutdown} [--control-topic TOPIC] [--timeout SEC]
+data_collect_dag status [--status-topic TOPIC] [--timeout SEC]
+data_collect_dag --config CONFIG --clean DAY
+data_collect_dag --init-demo DIR [--car-id CAR_ID] [--force]
 ```
 
-These request cleanup and summary writing for an active session before exiting. Foreground Ctrl+C also remains supported. The ROS `stop` command ends the collection session and keeps the program available for another `start`.
+Startup and cleanup require `--config`; control and export commands use no collection configuration. `--pipeline` defaults to `init` at startup and is ignored during cleanup/export. Control commands cannot be combined with startup, cleanup or export options. `--force` and `--car-id` apply only to export; export cannot be combined with `--config`, `--clean` or `--background`.
 
-To clean expired session directories while collection is stopped:
+On one Linux device, each fully resolved `ros.node_name` permits one instance, including while `IDLE`. Relative names use `ROS_NAMESPACE`; absolute names specify their namespace. Foreground and background startup acquire the same local lock before initializing ROS or loading calibration. Different node names can run together; give them distinct control/status topics to control them separately.
+
+Background startup passes the lock descriptor to the detached child, prints its PID and log path, and returns. The child inherits the Python environment, ROS environment and working directory. stdout/stderr append to `<output.root_dir>/background.log`. The PID confirms process creation; use the log and status to check initialization and collection. The program releases its lock on exit, including abnormal termination. Lock implementation details are in [runtime architecture](docs/architecture.md#1-运行路径).
+
+Control a running instance from another terminal:
+
+```bash
+data_collect_dag start fps
+data_collect_dag pause
+data_collect_dag resume
+data_collect_dag stop
+data_collect_dag status
+data_collect_dag shutdown
+```
+
+`start` checks the pipeline name before replacing the current session. An unknown name preserves the active session, including its paused state, and records `last_error`. `stop` ends the session and leaves the program available for another `start`. `shutdown` ends the session, writes its summary and exits. Foreground Ctrl+C and `kill -TERM PID` also request cleanup and exit.
+
+The anonymous control client uses `/data_collect/control` and `/data_collect/status` by default. Match custom YAML topics with CLI overrides:
+
+```bash
+data_collect_dag start fps --control-topic /vehicle/control --timeout 5
+data_collect_dag status --status-topic /vehicle/status --timeout 5
+```
+
+The client loads no collection YAML, calibration, DAG or inference model. `--timeout` is a finite positive number, defaulting to five seconds for the Master check and the topic connection/message wait. Missing Master, missing control subscriber, missing status publisher and detected send failures return nonzero. A sent command is asynchronous; query `status` to inspect State, Pipeline, Session, Saved, Skipped, Failed, Disk Free and Last Error. See [ROS control interface](docs/ros_external_system_architecture.md) for the message contract.
+
+### Demo pipelines
+
+| Pipeline in `demo/cfg.yaml` | Behavior | Inference required |
+| --- | --- | --- |
+| `init` | Topic precheck and synchronization; two-second active-duration limit, no save node | No |
+| `fps` | 1 FPS collection with image undistortion and point-cloud motion compensation | No |
+| `fps_undist` | FPS collection with motion compensation and five original camera images | No |
+| `fps_with_yolo` | YOLO-filtered FPS collection with undistortion | YOLO |
+| `compare_motion` | Motion-compensated and uncompensated point clouds in separate datasets | No |
+
+Collection pipelines have a 6,000-second active-duration limit. Completed or failed sessions leave the program available for control. Startup resolves message types for every configured `ros.topics` entry. Demo pipelines precheck configured topics for new messages within 500 ms on each session start.
+
+The demo selects `demo/calibration/sa4/cali.json`. `fps_with_yolo` requires the YOLO extra and `demo/models/yolo26m.pt`; supply your compatible weights in the checkout or export's `models/` directory. Its configured `device: gpu` requires CUDA; select `cpu` when using CPU inference.
+
+Relative `output.root_dir`, `calibration.path` and YOLO `model_path` values use the process working directory. The convenience command `bash run.sh /absolute/path/config.yaml [pipeline_name]` changes to the repository root and uses `.venv/bin/python3` when `.venv` exists, otherwise `python3` on `PATH`.
+
+## Storage and cleanup
+
+`output.disk_storage_limit_GB` limits ordinary file sizes under `output.root_dir`; `output.disk_storage_need_GB` sets the minimum free space required on each session start. Both use decimal GB (1,000,000,000 bytes), accept finite non-negative numbers, and are disabled by omission, `null` or `0`. The demo sets both to `100`.
+
+At startup, output size at or above the limit or free space below the requirement rejects the session. During collection, writes update cached sizes, logs are checked every second and directory scans reconcile external changes every 30 seconds. Reaching the limit stops new samples, finishes in-flight work and ends the session as `FAILED`. In-flight writes and final metadata can exceed the limit. Free space is checked at session admission. After freeing space, use `start` to retry.
+
+Clean session directories while collection is stopped:
 
 ```bash
 data_collect_dag --config demo/cfg.yaml --clean 2
 ```
 
-`--clean` only cleans and exits; it needs no ROS master, calibration or pipeline. `0` deletes all session directories, `1` keeps today, and `2` keeps today and yesterday. Dates come from session directory names in local time, not modification times. Other files/directories and symbolic links are preserved; future session dates are preserved when the value is greater than zero. An accompanying `--pipeline` is ignored.
+`--clean` exits after cleanup and needs only the output configuration. `0` removes all valid session directories, `1` keeps today, and `2` keeps today and yesterday. The date comes from the local-time directory name `YYYYMMDD_HHMMSS_<eight lowercase hex digits>`. For positive values, future dates are preserved. Unrelated files/directories and symbolic links are preserved; failures return nonzero.
 
-Under `output`, `disk_storage_limit_GB` limits the total ordinary file size in `root_dir`; `disk_storage_need_GB` requires minimum free space on its filesystem at each task start. Both use decimal GB (1,000,000,000 bytes); omit them or use `null`/`0` to disable. Values must be finite non-negative numbers. The demo sets both to `100`.
+## Calibration and results
 
-Before creating a session, collection is refused when output size is at least the limit or free space is below the requirement. During collection, file writes update cached sizes and each frame checks the limit; logs are refreshed every second and a background directory scan every 30 seconds detects external changes. At the limit, new frames stop and in-flight frames finish, so output may exceed the limit by those frames and final metadata/logs. The session ends as `FAILED` with the reason in status and its summary; ROS control remains available. Free space is only an admission check, not a continuous requirement. After freeing space, send a new start command to retry.
-
-Available sample pipelines:
-
-| Pipeline in `demo/cfg.yaml` | Behavior | Inference required |
-| --- | --- | --- |
-| `init` | Topic precheck and synchronization; two-second active session, no save node | No |
-| `fps` | 1 FPS collection with image undistortion and point-cloud motion compensation | No |
-| `fps_undist` | Same FPS/synchronization/point-cloud processing, images without undistortion | No |
-| `fps_with_yolo` | YOLO-filtered FPS collection with undistortion | YOLO |
-| `compare_motion` | Motion-compensated and uncompensated point clouds in separate datasets | No |
-
-Collection pipelines have a 6,000-second active-duration limit in the demo. A completed session leaves the program available for further ROS commands. All configured `ros.topics` must have resolvable message types, including topics not used by a particular pipeline.
-
-The checkout's demo YAML references `demo/calibration/sa4/cali.json`. Its YOLO pipeline references `demo/models/yolo26m.pt`; supply a compatible model checkpoint yourself (or put it in `<export-dir>/models/` for an exported configuration):
+Calibration files use `demo/calibration/<car-id>/cali.json`. Camera entries require `dist_model: equidistant` and four finite numeric `dist_coeffs` in OpenCV fisheye order `[k1, k2, k3, k4]`. Generate a calibration from an external vehicle source directory:
 
 ```bash
-mkdir -p demo/models
-# Place your compatible checkpoint at demo/models/yolo26m.pt
+/usr/bin/python3 tools/cali_parser.py /path/to/argus/SA14 -o demo/calibration/sa14/cali.json
 ```
 
-Some sample configurations explicitly request CUDA, so a CPU-only environment must use a non-inference pipeline or change the YOLO node's `device` setting.
+The tool creates output parent directories. Omitting `-o` writes `cali.json` inside the input vehicle directory.
 
-Relative values in `output.root_dir`, `calibration.path` and YOLO `model_path` are resolved against the **current working directory**, not the YAML's directory. Use absolute paths when launching from elsewhere; `--init-demo` already does this for the demo's calibration/model references. The convenience script `bash run.sh /absolute/path/config.yaml [pipeline_name]` changes its working directory to the repository root.
-
-`fps_undist` saves original images without undistortion, encoded as JPEG; its FPS control, synchronization and lidar processing match `fps`. Each camera entry in `camera_config/<timestamp>.json` includes the source `dist_model` and `dist_coeffs`, with intrinsics scaled to the saved image resolution. Existing pipelines keep their camera JSON format.
-
-Camera calibration entries require `"dist_model": "equidistant"` and four finite numeric `dist_coeffs` in OpenCV fisheye order `[k1, k2, k3, k4]`. Missing/invalid parameters and other models are rejected. Vehicle calibrations use `demo/calibration/<car-id>/cali.json`.
-
-Generate a calibration from your external vehicle source directory in a checkout:
-
-```bash
-python3.8 tools/cali_parser.py /path/to/argus/SA14 -o demo/calibration/sa14/cali.json
-```
-
-The tool creates output parent directories. Without `-o`, it writes `cali.json` inside the input vehicle directory. The input calibration sources are external resources; see [calibration and output formats](docs/architecture.md#4-数据与文件).
-
-## ROS control and results
-
-The demo configurations use `/data_collect/control` and `/data_collect/status`, both with `std_msgs/String` messages containing JSON. The control commands are `start`, `pause`, `resume`, `stop` and `shutdown`. Optional `std_srvs/Trigger` services can also be configured. See [ROS control interface](docs/ros_external_system_architecture.md).
-
-Results are written under `<output.root_dir>/<session_id>/`:
-
-- `debug.log` — session log.
-- `session_summary.json` — end state, timings/metrics and errors.
-- `saved_samples.json` — index of saved samples.
-- `xtreme1/<dataset_name>/` — JPEG images, ASCII PCD and camera JSON, if an Xtreme1 save node runs.
-
-See [architecture and configuration](docs/architecture.md) for node types, execution rules and YAML fields.
+Session results under `<output.root_dir>/<session_id>/` include `debug.log`, `session_summary.json` and `saved_samples.json`. A configured Xtreme1 save node writes JPEG images, ASCII PCD and camera JSON under `xtreme1/<dataset_name>/`. `fps_undist` includes source distortion parameters in each camera entry; intrinsics scale to the saved image resolution. See [configuration and output formats](docs/architecture.md#4-数据与文件).
 
 ## Tests
 
+Run with system Python 3.8 from the repository root:
+
 ```bash
-python -m pip install -e '.[test]'
-python -m pytest tests/unit -q
-python -m pytest tests/functional -q
+/usr/bin/python3 -m pip install -e '.[test]'
+PYTHONPATH=src /usr/bin/python3 -m pytest tests/unit -q
+PYTHONPATH=src /usr/bin/python3 -m pytest tests/functional -q
 ```
 
-The Python tests mock ROS interactions where needed; actual acquisition still requires a live ROS environment. Base-install tests verify that FPS DAG construction does not import inference packages. Packaging tests verify offline export from wheels, source distributions and editable installs. See [repository guidelines](AGENTS.md) for development conventions.
+The default tests simulate ROS and use real Linux processes for locking and background inheritance. Opt-in integration tests start isolated local ROS1 masters and exercise the CLI over TCPROS:
+
+```bash
+source /opt/ros/noetic/setup.bash
+PYTHONPATH=src DCD_TEST_REAL_ROS=1 /usr/bin/python3 -m pytest tests/functional/test_ros_cli_integration.py -q
+```
+
+These integration tests use standard ROS messages and temporary configurations. Base-install tests check FPS DAG construction without inference packages; packaging tests check template export from wheels, source distributions and editable installs. Development rules are in [AGENTS.md](AGENTS.md).

@@ -80,7 +80,7 @@ def test_readme_cli_examples_parse_and_select_bundled_cars():
                 # --help is itself a valid documented command.
                 assert error.code == 0
                 continue
-            assert args.config is not None or args.init_demo is not None
+            assert args.config is not None or args.init_demo is not None or args.command is not None
             if args.car_id is not None:
                 assert args.init_demo is not None and args.car_id.lower() in cars
             examples += 1

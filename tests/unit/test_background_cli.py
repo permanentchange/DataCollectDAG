@@ -7,6 +7,7 @@ import pytest
 
 from data_collect_dag.app import build_parser
 from data_collect_dag.cli import main
+from data_collect_dag.instance_guard import InstanceGuard, load_node_name
 
 
 def test_background_launch_uses_current_python_and_detaches(tmp_path, monkeypatch, capsys):
@@ -26,10 +27,10 @@ def test_background_launch_uses_current_python_and_detaches(tmp_path, monkeypatc
     monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", "config.yaml", "--pipeline", "fps", "--background"])
     def forbidden(*args, **kwargs):
         raise AssertionError("parent must not construct a runtime")
-    monkeypatch.setattr("data_collect_dag.cli.AppRuntime", forbidden)
+    monkeypatch.setattr("data_collect_dag.app.AppRuntime", forbidden)
     assert main() == 0
     command, kwargs = calls[0]
-    assert command == [sys.executable, "-u", "-m", "data_collect_dag", "--config", str(config), "--pipeline", "fps"]
+    assert command == [sys.executable, "-u", "-m", "data_collect_dag", "--config", str(config), "--pipeline", "fps", "--instance-lock-fd", str(kwargs["pass_fds"][0])]
     assert kwargs["start_new_session"] is True and kwargs["close_fds"] is True
     assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["stderr"] == subprocess.STDOUT
     assert "cwd" not in kwargs and "env" not in kwargs
@@ -64,14 +65,45 @@ def test_background_and_clean_are_mutually_exclusive():
     assert exc.value.code == 2
 
 
-def test_foreground_remains_default(monkeypatch):
+def test_foreground_remains_default(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("config.yaml").write_text("ros:\n  node_name: foreground_unit_test\n")
     calls = []
     class Runtime:
         def __init__(self, **kwargs):
             calls.append(kwargs)
+            self.app_config = SimpleNamespace(ros_node_name="foreground_unit_test")
         def run(self):
             return 7
-    monkeypatch.setattr("data_collect_dag.cli.AppRuntime", Runtime)
+    monkeypatch.setattr("data_collect_dag.app.AppRuntime", Runtime)
     monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", "config.yaml"])
     assert main() == 7
     assert calls == [{"config_path": Path("config.yaml"), "pipeline_name": "init"}]
+
+
+def test_duplicate_is_rejected_before_runtime_initialization(tmp_path, monkeypatch, capsys):
+    config = tmp_path / "config.yaml"
+    config.write_text("ros:\n  node_name: duplicate_unit_test\ncalibration:\n  path: missing.json\n")
+    def forbidden(**kwargs):
+        raise AssertionError("duplicate must fail before runtime construction")
+    monkeypatch.setattr("data_collect_dag.app.AppRuntime", forbidden)
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", str(config)])
+    with InstanceGuard(load_node_name(config)):
+        assert main() == 1
+    assert "is already running" in capsys.readouterr().err
+
+
+def test_config_name_change_cannot_start_under_wrong_lock(tmp_path, monkeypatch, capsys):
+    config = tmp_path / "config.yaml"
+    config.write_text("ros:\n  node_name: config_change_unit_test\n")
+    class Runtime:
+        def __init__(self, **kwargs):
+            self.app_config = SimpleNamespace(ros_node_name="changed_unit_test")
+        def run(self):
+            raise AssertionError("must not initialize ROS with an unguarded name")
+    monkeypatch.setattr("data_collect_dag.app.AppRuntime", Runtime)
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", str(config)])
+    assert main() == 1
+    assert "ros.node_name changed" in capsys.readouterr().err
+    with InstanceGuard(load_node_name(config)):
+        pass

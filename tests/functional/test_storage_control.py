@@ -68,7 +68,7 @@ def test_clean_cli_without_ros_or_pipeline(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", str(config), "--pipeline", "missing", "--clean", "0"])
     def forbidden(*args, **kwargs):
         raise AssertionError("cleanup must not construct a ROS runtime")
-    monkeypatch.setattr("data_collect_dag.cli.AppRuntime", forbidden)
+    monkeypatch.setattr("data_collect_dag.app.AppRuntime", forbidden)
     assert main() == 0
     assert not session.exists() and root.exists()
     assert "deleted 1 session directories" in capsys.readouterr().out
