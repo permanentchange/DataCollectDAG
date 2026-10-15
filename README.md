@@ -131,10 +131,19 @@ The client loads no collection YAML, calibration, DAG or inference model. `--tim
 | `init` | Topic precheck and synchronization; two-second active-duration limit, no save node | No |
 | `fps` | 1 FPS collection with image undistortion and point-cloud motion compensation | No |
 | `fps_undist` | FPS collection with motion compensation and five original camera images | No |
+| `fps_undist_nomotion` | FPS collection with static lidar transforms and five original camera images | No |
 | `fps_with_yolo` | YOLO-filtered FPS collection with undistortion | YOLO |
 | `compare_motion` | Motion-compensated and uncompensated point clouds in separate datasets | No |
 
-Collection pipelines have a 6,000-second active-duration limit. Completed or failed sessions leave the program available for control. Startup resolves message types for every configured `ros.topics` entry. Demo pipelines precheck configured topics for new messages within 500 ms on each session start.
+Collection pipelines have a 6,000-second active-duration limit. Completed or failed sessions leave the program available for control. Startup resolves message types for every configured `ros.topics` entry. Demo pipelines precheck configured topics for new messages within 500 ms on each session start. `fps_undist_nomotion` checks only the five cameras and five lidars; it needs no incoming localization, IMU, odometry or NMEA messages. It transforms each lidar into `base` using static calibration and merges the clouds without ego-motion compensation.
+
+```bash
+data_collect_dag --config demo/cfg.yaml --pipeline fps_undist_nomotion
+# Or control an instance started with this pipeline in its configuration:
+data_collect_dag start fps_undist_nomotion
+```
+
+Pipeline definitions are loaded at program startup. Configuration edits require restarting the collection program; exported configurations must be updated or re-exported separately.
 
 The demo selects `demo/calibration/sa4/cali.json`. `fps_with_yolo` requires the YOLO extra and `demo/models/yolo26m.pt`; supply your compatible weights in the checkout or export's `models/` directory. Its configured `device: gpu` requires CUDA; select `cpu` when using CPU inference.
 
@@ -164,7 +173,7 @@ Calibration files use `demo/calibration/<car-id>/cali.json`. Camera entries requ
 
 The tool creates output parent directories. Omitting `-o` writes `cali.json` inside the input vehicle directory.
 
-Session results under `<output.root_dir>/<session_id>/` include `debug.log`, `session_summary.json` and `saved_samples.json`. A configured Xtreme1 save node writes JPEG images, ASCII PCD and camera JSON under `xtreme1/<dataset_name>/`. `fps_undist` includes source distortion parameters in each camera entry; intrinsics scale to the saved image resolution. See [configuration and output formats](docs/architecture.md#4-数据与文件).
+Session results under `<output.root_dir>/<session_id>/` include `debug.log`, `session_summary.json` and `saved_samples.json`. A configured Xtreme1 save node writes JPEG images, ASCII PCD and camera JSON under `xtreme1/<dataset_name>/`. `fps_undist` and `fps_undist_nomotion` save under `collect_demo` and include source distortion parameters in each camera entry; intrinsics scale to the saved image resolution. See [configuration and output formats](docs/architecture.md#4-数据与文件).
 
 ## Tests
 

@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("pipeline_name", ["fps", "fps_undist"])
+@pytest.mark.parametrize("pipeline_name", ["fps", "fps_undist", "fps_undist_nomotion"])
 def test_fps_pipeline_does_not_import_optional_inference_libraries(tmp_path, pipeline_name):
     # A fresh process prevents an earlier test from hiding eager imports in
     # sys.modules. The import blocker simulates an environment without ML.

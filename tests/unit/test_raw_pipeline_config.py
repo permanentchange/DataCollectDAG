@@ -36,6 +36,42 @@ def test_fps_undist_preserves_fps_processing_and_saves_original_images():
         assert raw.successors.get(key, []) == expected
 
 
+def test_fps_undist_nomotion_uses_static_lidar_transforms_and_sensor_prechecks():
+    config = load_app_config(Path("demo/cfg.yaml"))
+    reference = config.pipelines["fps_undist"]
+    pipeline = config.pipelines["fps_undist_nomotion"]
+    assert pipeline.main_source == reference.main_source
+    assert pipeline.stop_conditions == reference.stop_conditions
+    assert pipeline.time_delay_ms == reference.time_delay_ms == 500
+    sensors = {key for key, topic in config.topics.items() if topic.role in {"image", "pointcloud"}}
+    assert len(pipeline.topics) == len(sensors) == 10
+    assert set(pipeline.topics) == sensors
+    forbidden = {"image_undistort", "pointcloud_motion_compensation", "yolo_gate"}
+    assert not any(node.node_type in forbidden for node in pipeline.nodes_by_id.values())
+    transforms = [node for node in pipeline.nodes_by_id.values() if node.node_type == "pointcloud_transform"]
+    lidar_keys = {key for key, topic in config.topics.items() if topic.role == "pointcloud"}
+    assert len(transforms) == len(lidar_keys) == 5
+    assert {node.config["sensor_topic"] for node in transforms} == {config.topics[key].topic for key in lidar_keys}
+    expected_inputs = {"top_lidar_synced", "front_left_lidar", "front_right_lidar", "rear_left_lidar", "rear_right_lidar"}
+    assert {node.inputs["pointcloud"] for node in transforms} == expected_inputs
+    for node in transforms:
+        assert node.config["required"] is True
+        assert "localization_source" not in node.config
+        source = "sync_top_lidar" if node.inputs["pointcloud"] == "top_lidar_synced" else "sync_corner_lidars"
+        assert pipeline.predecessors[node.node_id] == [source]
+        assert pipeline.successors[node.node_id] == ["aggregate_pointclouds"]
+    aggregate = pipeline.nodes_by_id["aggregate_pointclouds"]
+    assert set(aggregate.config["required_inputs"]) == {node.outputs["pointcloud"] for node in transforms}
+    assert set(pipeline.predecessors["aggregate_pointclouds"]) == {node.node_id for node in transforms}
+    assert aggregate.outputs == reference.nodes_by_id["aggregate_pointclouds"].outputs
+    for name in ("start", "fps_guard", "sync_top_lidar", "sync_corner_lidars", "sync_images",
+                 "save_xtreme1", "fps_marker", "end"):
+        assert pipeline.nodes_by_id[name] == reference.nodes_by_id[name]
+    assert set(pipeline.predecessors["save_xtreme1"]) == {"aggregate_pointclouds", "sync_images"}
+    assert pipeline.successors["save_xtreme1"] == ["fps_marker"]
+    assert pipeline.successors["fps_marker"] == ["end"]
+
+
 @pytest.mark.parametrize("value", ["true", 1, None, []])
 def test_include_distortion_params_requires_boolean(tmp_path, value):
     payload = yaml.safe_load(Path("demo/cfg.yaml").read_text())

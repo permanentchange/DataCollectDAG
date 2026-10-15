@@ -35,7 +35,7 @@ source /opt/ros/noetic/setup.bash
 PYTHONPATH=src DCD_TEST_REAL_ROS=1 /usr/bin/python3 -m pytest tests/functional/test_ros_cli_integration.py -q
 ```
 
-The base installation must not install or import torch, torchvision, Ultralytics or ONNX. `demo/cfg.yaml` supplies non-inference `init`, `fps`, `fps_undist` and `compare_motion` pipelines; `fps_with_yolo` requires the YOLO extra and `demo/models/yolo26m.pt`. The demo selects SA4 calibration. Jetson YOLO installations use `bash setup.bash arm` with compatible wheels in `~/wheels` and Python 3.8 on `PATH` as `python`.
+The base installation must not install or import torch, torchvision, Ultralytics or ONNX. `demo/cfg.yaml` supplies non-inference `init`, `fps`, `fps_undist`, `fps_undist_nomotion` and `compare_motion` pipelines; `fps_with_yolo` requires the YOLO extra and `demo/models/yolo26m.pt`. `fps_undist_nomotion` saves original images and statically transformed lidar clouds; its precheck covers only the five cameras and five lidars. The demo selects SA4 calibration. Jetson YOLO installations use `bash setup.bash arm` with compatible wheels in `~/wheels` and Python 3.8 on `PATH` as `python`.
 
 Startup and `--clean DAY` require `--config`; control commands require no collection config. One fully resolved ROS node name permits one local instance, including while `IDLE`; each instance permits one active pipeline. Acquire the lock before runtime construction, retain it through foreground/background execution and pass its descriptor to a background child. Close descriptors without explicitly unlocking the shared file description or deleting the lock file. Validate the requested pipeline name before stopping the active session. Keep control commands on the existing ROS topics and status protocol.
 
