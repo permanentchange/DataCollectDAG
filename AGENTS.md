@@ -11,10 +11,11 @@ Use the implementation in `src/data_collect_dag/`, the committed demo YAML files
 - `src/data_collect_dag/ros_control_client.py`: anonymous ROS CLI client for control commands and one-shot status queries.
 - `src/data_collect_dag/app.py`, `session.py`, `dag.py`: application, session lifecycle and DAG execution.
 - `src/data_collect_dag/config.py`, `models.py`, `status.py`: configuration validation, shared types and status snapshots.
+- `src/data_collect_dag/config_summary.py`: offline summaries of validated configuration; `node_registry.py`: shared node names and lazy loading information.
 - `src/data_collect_dag/ros_adapter.py`, `ros_messages.py`, `ros_env.py`: ROS1 interfaces, message resolution and Python path setup.
-- `src/data_collect_dag/nodes/`: built-in nodes; register new types in `session.py::NODE_TYPES`.
+- `src/data_collect_dag/nodes/`: built-in nodes; register new types in `node_registry.py::NODE_TYPES`.
 - `demo/cfg.yaml`: demo pipelines. Vehicle calibrations are under `demo/calibration/<car-id>/cali.json`.
-- `src/data_collect_dag/demo_templates.py`, `setup.py`, `MANIFEST.in`: template export and bundled resources.
+- `src/data_collect_dag/config_templates.py`, `setup.py`, `MANIFEST.in`: template export and bundled resources.
 - `tests/unit/`, `tests/functional/`: pytest coverage.
 - `README.md`: installation and CLI usage. `docs/architecture.md`: runtime/config reference. `docs/ros_external_system_architecture.md`: ROS control contract.
 
@@ -37,9 +38,9 @@ PYTHONPATH=src DCD_TEST_REAL_ROS=1 /usr/bin/python3 -m pytest tests/functional/t
 
 The base installation must not install or import torch, torchvision, Ultralytics or ONNX. `demo/cfg.yaml` supplies non-inference `init`, `fps`, `fps_undist`, `fps_undist_nomotion` and `compare_motion` pipelines; `fps_with_yolo` requires the YOLO extra and `demo/models/yolo26m.pt`. `fps_undist_nomotion` saves original images and statically transformed lidar clouds; its precheck covers only the five cameras and five lidars. The demo selects SA4 calibration. Jetson YOLO installations use `bash setup.bash arm` with compatible wheels in `~/wheels` and Python 3.8 on `PATH` as `python`.
 
-Startup and `--clean DAY` require `--config`; control commands require no collection config. One fully resolved ROS node name permits one local instance, including while `IDLE`; each instance permits one active pipeline. Acquire the lock before runtime construction, retain it through foreground/background execution and pass its descriptor to a background child. Close descriptors without explicitly unlocking the shared file description or deleting the lock file. Validate the requested pipeline name before stopping the active session. Keep control commands on the existing ROS topics and status protocol.
+`run`, `inspect` and `clean` require `--config`; `clean` also requires `--keep-days N`; control commands require no collection config. One fully resolved ROS node name permits one local instance, including while `IDLE`; each instance permits one active pipeline. Acquire the lock before runtime construction, retain it through foreground/background execution and pass its descriptor to a background child. Close descriptors without explicitly unlocking the shared file description or deleting the lock file. Validate the requested pipeline name before stopping the active session. Keep control commands on the existing ROS topics and status protocol.
 
-`--init-demo DIR [--car-id CAR_ID] [--force]` exports templates offline. Car IDs are case-insensitive; omission exports all calibrations with SA4 selected. Calibration and demo model references are absolute. Preserve unrelated files, other calibrations and weights during export, and keep packaging checks consistent with templates. `--background` applies only to startup; `--pipeline` is ignored during cleanup/export.
+`init DIR [--car-id CAR_ID] [--force]` exports templates offline. Car IDs are case-insensitive; omission exports all calibrations with SA4 selected. Calibration and demo model references are absolute. Preserve unrelated files, other calibrations and weights during export, and keep packaging checks consistent with templates. `--background` applies only to `run`; `--pipeline` applies only to `run` and `inspect`. `inspect` reuses full static validation without importing runtime/node implementations or checking external resources.
 
 ## Code and review conventions
 

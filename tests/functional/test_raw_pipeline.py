@@ -15,7 +15,8 @@ from data_collect_dag.config import load_app_config
 from data_collect_dag.models import FrameMeta, ImageFrame, PointCloudFrame
 from data_collect_dag.nodes.base import BaseNode
 from data_collect_dag.ros_adapter import RosAdapter
-from data_collect_dag.session import NODE_TYPES, SessionRuntime
+from data_collect_dag.node_registry import load_node_type
+from data_collect_dag.session import SessionRuntime
 from data_collect_dag.status import StatusManager
 
 
@@ -37,9 +38,9 @@ def test_raw_pipeline_saves_synced_original_images_and_pointclouds(tmp_path, mon
     if pipeline_name == "fps_undist":
         # Physical motion compensation is covered by its own node tests.
         pipeline = replace(pipeline, topics=[], time_delay_ms=None)
-        monkeypatch.setitem(NODE_TYPES, "pointcloud_motion_compensation", CompensatedLidarNode)
+        monkeypatch.setattr("data_collect_dag.session.load_node_type", lambda name: CompensatedLidarNode if name == "pointcloud_motion_compensation" else load_node_type(name))
     else:
-        monkeypatch.setitem(NODE_TYPES, "pointcloud_motion_compensation", ForbiddenMotionNode)
+        monkeypatch.setattr("data_collect_dag.session.load_node_type", lambda name: ForbiddenMotionNode if name == "pointcloud_motion_compensation" else load_node_type(name))
     def forbidden():
         raise AssertionError("raw pipeline must not invoke undistortion")
     monkeypatch.setattr("data_collect_dag.nodes.image_undistort._load_cv2", forbidden)

@@ -79,7 +79,7 @@ def test_clean_reports_deletion_failure(tmp_path, monkeypatch):
 @pytest.mark.parametrize("value", ["-1", "1.5", "invalid"])
 def test_clean_rejects_invalid_argument(value):
     with pytest.raises(SystemExit) as exc:
-        build_parser().parse_args(["--config", "unused.yaml", "--clean", value])
+        build_parser().parse_args(["clean", "--config", "unused.yaml", "--keep-days", value])
     assert exc.value.code == 2
 
 

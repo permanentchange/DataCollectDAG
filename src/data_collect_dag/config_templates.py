@@ -1,4 +1,4 @@
-"""Offline export of bundled demo templates; no ROS or inference dependencies."""
+"""Offline export of bundled configuration templates; no ROS or inference dependencies."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _demo_path(value: Any, destination: Path) -> Any:
     if isinstance(value, str) and value.startswith("demo/"):
         relative = Path(value).relative_to("demo")
         if ".." in relative.parts:
-            raise ValueError(f"unsafe demo reference: {value}")
+            raise ValueError(f"unsafe configuration reference: {value}")
         return str(destination / relative)
     return value
 
@@ -52,7 +52,7 @@ def available_car_ids(templates: Dict[str, bytes]) -> List[str]:
 def _rewrite_config(payload: bytes, destination: Path, car_id: str) -> bytes:
     config = yaml.safe_load(payload)
     if not isinstance(config, dict):
-        raise ValueError("demo configuration must be a YAML mapping")
+        raise ValueError("configuration template must be a YAML mapping")
     calibration = config.get("calibration")
     if isinstance(calibration, dict) and "path" in calibration:
         calibration["path"] = str(destination / "calibration" / car_id / "cali.json")
@@ -80,18 +80,18 @@ def _check_directory(directory: Path, destination: Path) -> None:
         try:
             ancestor.resolve().relative_to(destination)
         except ValueError:
-            raise ValueError(f"directory symlink escapes demo destination: {ancestor}")
+            raise ValueError(f"directory symlink escapes configuration destination: {ancestor}")
         if ancestor.exists() and not ancestor.is_dir():
             raise ValueError(f"expected a directory: {ancestor}")
         if ancestor.is_symlink() and not ancestor.exists():
             raise ValueError(f"dangling directory symlink: {ancestor}")
 
 
-def export_demo(destination: Path, force: bool = False, car_id: Optional[str] = None) -> Path:
+def export_config_templates(destination: Path, force: bool = False, car_id: Optional[str] = None) -> Path:
     destination = destination.expanduser().resolve()
     templates = read_templates()
     if not templates:
-        raise ValueError("no demo templates found")
+        raise ValueError("no configuration templates found")
     cars = available_car_ids(templates)
     config_car = DEFAULT_CAR_ID if car_id is None else car_id.lower()
     if config_car not in cars:
@@ -100,7 +100,7 @@ def export_demo(destination: Path, force: bool = False, car_id: Optional[str] = 
     for name, payload in templates.items():
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts or not relative.parts:
-            raise ValueError(f"unsafe demo template path: {name}")
+            raise ValueError(f"unsafe configuration template path: {name}")
         if relative.parts[0] == "calibration":
             if len(relative.parts) < 3 or relative.parts[1] not in cars:
                 continue
@@ -111,7 +111,7 @@ def export_demo(destination: Path, force: bool = False, car_id: Optional[str] = 
         if target.is_dir() and not target.is_symlink():
             raise ValueError(f"template destination is a directory: {target}")
         if not force and (target.exists() or target.is_symlink()):
-            raise ValueError(f"demo template already exists: {target}; choose another directory or use --force")
+            raise ValueError(f"configuration template already exists: {target}; choose another directory or use --force")
         files[target] = _rewrite_config(payload, destination, config_car) if relative.suffix in {".yaml", ".yml"} else payload
     models = destination / "models"
     _check_directory(models, destination)

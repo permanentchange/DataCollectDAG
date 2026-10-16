@@ -51,7 +51,7 @@ def instance_env(tmp_path):
 
 
 def launch(config, env, background=False):
-    command = [sys.executable, "-m", "data_collect_dag", "--config", str(config)]
+    command = [sys.executable, "-m", "data_collect_dag", "run", "--config", str(config)]
     if background:
         command.append("--background")
     return subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

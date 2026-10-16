@@ -90,7 +90,7 @@ def test_real_ros_cli_lifecycle_locking_and_timeouts(tmp_path, ros_env, backgrou
         "cache": {"defaults_by_role": {"image": {"max_frames": 2, "max_age_sec": 1}}},
         "pipelines": {"init": pipeline, "fps": pipeline},
     }))
-    args = ["--config", str(config)] + (["--background"] if background else [])
+    args = ["run", "--config", str(config)] + (["--background"] if background else [])
     with (tmp_path / "collector.log").open("w") as log:
         process = subprocess.Popen([sys.executable, "-m", "data_collect_dag", *args], env=ros_env,
                                    stdout=log, stderr=log, start_new_session=True)
@@ -117,7 +117,7 @@ def test_real_ros_cli_lifecycle_locking_and_timeouts(tmp_path, ros_env, backgrou
             assert cli(ros_env, "stop").returncode == 0
             wait_status(ros_env, "IDLE")
             for duplicate_background in (False, True):
-                duplicate = cli(ros_env, "--config", str(config), *(["--background"] if duplicate_background else []))
+                duplicate = cli(ros_env, "run", "--config", str(config), *(["--background"] if duplicate_background else []))
                 assert duplicate.returncode == 1 and "is already running" in duplicate.stderr
             missing = cli(ros_env, "pause", "--control-topic", "/absent/control", "--timeout", "0.2")
             assert missing.returncode == 1 and "no collection control subscriber" in missing.stderr

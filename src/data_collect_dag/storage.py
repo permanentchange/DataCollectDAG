@@ -23,7 +23,7 @@ class StorageError(RuntimeError):
 
 def clean_sessions(root: Path, days: int, today: Optional[date] = None) -> int:
     if isinstance(days, bool) or not isinstance(days, int) or days < 0:
-        raise ValueError("--clean must be a non-negative integer")
+        raise ValueError("--keep-days must be a non-negative integer")
     if not root.exists():
         return 0
     current_date = today or date.today()

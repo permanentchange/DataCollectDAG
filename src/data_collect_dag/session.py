@@ -23,47 +23,13 @@ from data_collect_dag.models import (
     make_session_id,
     utc_now_iso,
 )
-from data_collect_dag.nodes import (
-    AggregatePointCloudNode,
-    EndNode,
-    FpsGuardNode,
-    FpsMarkerNode,
-    ImageUndistortNode,
-    LocalizationRangeNode,
-    MultiTimeSyncNode,
-    PointCloudMotionCompensationNode,
-    PointCloudRadiusCropNode,
-    PointCloudRoiCropNode,
-    PointCloudTransformNode,
-    StartNode,
-    TimeSyncNode,
-    YoloGateNode,
-    Xtreme1SaveNode,
-)
+from data_collect_dag.node_registry import load_node_type
 from data_collect_dag.ros_adapter import RosAdapter
 from data_collect_dag.sample_context import SampleContext
 from data_collect_dag.status import StatusManager
 from data_collect_dag.storage import StorageError, StorageTracker, check_disk_free
 from data_collect_dag.summary import SummaryWriter
 
-
-NODE_TYPES = {
-    "start": StartNode,
-    "end": EndNode,
-    "fps_guard": FpsGuardNode,
-    "fps_marker": FpsMarkerNode,
-    "image_undistort": ImageUndistortNode,
-    "time_sync": TimeSyncNode,
-    "multi_time_sync": MultiTimeSyncNode,
-    "localization_range": LocalizationRangeNode,
-    "pointcloud_radius_crop": PointCloudRadiusCropNode,
-    "pointcloud_motion_compensation": PointCloudMotionCompensationNode,
-    "pointcloud_transform": PointCloudTransformNode,
-    "pointcloud_roi_crop": PointCloudRoiCropNode,
-    "aggregate_pointclouds": AggregatePointCloudNode,
-    "yolo_gate": YoloGateNode,
-    "xtreme1_structured_save": Xtreme1SaveNode,
-}
 
 STORAGE_RECONCILE_INTERVAL_SEC = 30.0
 STORAGE_LOG_INTERVAL_SEC = 1.0
@@ -531,7 +497,7 @@ class SessionRuntime:
     def _build_nodes(self) -> None:
         self._node_pool = concurrent.futures.ThreadPoolExecutor(max_workers=self.app_config.runtime.node_workers)
         for node_config in self.pipeline.nodes_by_id.values():
-            node_cls = NODE_TYPES[node_config.node_type]
+            node_cls = load_node_type(node_config.node_type)
             node = node_cls(node_config, self)
             self._nodes[node_config.node_id] = node
             node.setup()

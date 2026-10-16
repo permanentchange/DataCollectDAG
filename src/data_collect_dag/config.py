@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import yaml
 
+from data_collect_dag.node_registry import NODE_TYPES
 from data_collect_dag.models import (
     AppConfig,
     CachePolicy,
@@ -22,6 +23,75 @@ from data_collect_dag.models import (
 
 class ConfigError(ValueError):
     pass
+
+
+def _mapping(value: Any, location: str) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigError(f"{location} must be a mapping")
+    if any(not isinstance(key, str) or not key.strip() for key in value):
+        raise ConfigError(f"{location} keys must be non-empty strings")
+    return value
+
+
+def _sequence(value: Any, location: str) -> List[Any]:
+    if not isinstance(value, list):
+        raise ConfigError(f"{location} must be a list")
+    return value
+
+
+def _required(mapping: Dict[str, Any], key: str, location: str) -> Any:
+    if key not in mapping:
+        raise ConfigError(f"{location}.{key} is required")
+    value = mapping[key]
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{location}.{key} must be a non-empty string")
+    return value
+
+
+def _convert(converter: Any, value: Any, location: str) -> Any:
+    try:
+        return converter(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ConfigError(f"{location}: {exc}") from exc
+
+
+def _read_config(path: Path) -> Dict[str, Any]:
+    return _mapping(yaml.safe_load(path.read_text(encoding="utf-8")), "config root")
+
+
+def _validate_structure(raw: Dict[str, Any]) -> None:
+    for section in ("ros", "cache", "runtime", "pipelines", "calibration"):
+        _mapping(raw.get(section), section)
+    ros = _mapping(raw.get("ros"), "ros")
+    topics = _mapping(ros.get("topics"), "ros.topics")
+    for key, value in topics.items():
+        topic = _mapping(value, f"ros.topics.{key}")
+        for field in ("topic", "msg_type", "role"):
+            _required(topic, field, f"ros.topics.{key}")
+    _mapping(ros.get("control"), "ros.control")
+    cache = _mapping(raw.get("cache"), "cache")
+    for field in ("defaults_by_role", "topic_overrides"):
+        for key, value in _mapping(cache.get(field), f"cache.{field}").items():
+            _mapping(value, f"cache.{field}.{key}")
+    for name, value in _mapping(raw.get("pipelines"), "pipelines").items():
+        location = f"pipelines.{name}"
+        pipeline = _mapping(value, location)
+        _required(pipeline, "main_source", location)
+        if not isinstance(pipeline.get("description", ""), str):
+            raise ConfigError(f"{location}.description must be a string")
+        _mapping(pipeline.get("stop_conditions"), f"{location}.stop_conditions")
+        for index, value in enumerate(_sequence(pipeline.get("nodes", []), f"{location}.nodes")):
+            node_location = f"{location}.nodes[{index}]"
+            node = _mapping(value, node_location)
+            for field in ("node_id", "type"):
+                _required(node, field, node_location)
+            for field in ("inputs", "outputs", "config"):
+                _mapping(node.get(field), f"{node_location}.{field}")
+        for index, edge in enumerate(_sequence(pipeline.get("edges", []), f"{location}.edges")):
+            if not isinstance(edge, list) or len(edge) != 2 or not all(isinstance(item, str) for item in edge):
+                raise ConfigError(f"{location}.edges[{index}] must contain two node IDs")
 
 
 def parse_output_config(raw: Any) -> Tuple[Path, Optional[float], Optional[float]]:
@@ -41,20 +111,18 @@ def parse_output_config(raw: Any) -> Tuple[Path, Optional[float], Optional[float
             if not math.isfinite(value) or value < 0:
                 raise ConfigError(f"output.{key} must be a finite non-negative number")
         values.append(value or None)
-    return Path(output.get("root_dir", "output")).expanduser().resolve(), values[0], values[1]
+    root = _convert(Path, output.get("root_dir", "output"), "output.root_dir")
+    return root.expanduser().resolve(), values[0], values[1]
 
 
 def load_output_config(path: Path) -> Tuple[Path, Optional[float], Optional[float]]:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ConfigError("config root must be a mapping")
+    raw = _read_config(path)
     return parse_output_config(raw.get("output"))
 
 
 def load_app_config(path: Path) -> AppConfig:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ConfigError("config root must be a mapping")
+    raw = _read_config(path)
+    _validate_structure(raw)
     output_root, storage_limit, storage_need = parse_output_config(raw.get("output"))
     ros = raw.get("ros") or {}
     cache = raw.get("cache") or {}
@@ -66,11 +134,11 @@ def load_app_config(path: Path) -> AppConfig:
     compiled_pipelines = _parse_pipelines(pipelines, topics)
     runtime_config = RuntimeConfig(
         debug=bool(runtime.get("debug", False)),
-        sample_workers=int(runtime.get("sample_workers", 1)),
-        node_workers=int(runtime.get("node_workers", 4)),
-        main_frame_queue_size=int(runtime.get("main_frame_queue_size", 20)),
-        main_frame_delay_ms=int(runtime.get("main_frame_delay_ms", 0)),
-        stop_timeout_sec=float(runtime.get("stop_timeout_sec", 5.0)),
+        sample_workers=_convert(int, runtime.get("sample_workers", 1), "runtime.sample_workers"),
+        node_workers=_convert(int, runtime.get("node_workers", 4), "runtime.node_workers"),
+        main_frame_queue_size=_convert(int, runtime.get("main_frame_queue_size", 20), "runtime.main_frame_queue_size"),
+        main_frame_delay_ms=_convert(int, runtime.get("main_frame_delay_ms", 0), "runtime.main_frame_delay_ms"),
+        stop_timeout_sec=_convert(float, runtime.get("stop_timeout_sec", 5.0), "runtime.stop_timeout_sec"),
     )
     _validate_runtime_config(runtime_config)
     return AppConfig(
@@ -84,7 +152,7 @@ def load_app_config(path: Path) -> AppConfig:
         cache_policies=cache_policies,
         runtime=runtime_config,
         pipelines=compiled_pipelines,
-        calibration_path=Path(calibration["path"]).expanduser().resolve() if calibration.get("path") else None,
+        calibration_path=_convert(Path, calibration["path"], "calibration.path").expanduser().resolve() if calibration.get("path") else None,
     )
 
 
@@ -142,7 +210,10 @@ def _parse_cache_policies(raw_cache: Dict[str, Any], topics: Dict[str, TopicConf
         payload.update(overrides.get(topic_key) or {})
         if "max_frames" not in payload or "max_age_sec" not in payload:
             raise ConfigError(f"missing cache policy for topic_key={topic_key}")
-        result[topic_key] = CachePolicy(max_frames=int(payload["max_frames"]), max_age_sec=float(payload["max_age_sec"]))
+        result[topic_key] = CachePolicy(
+            max_frames=_convert(int, payload["max_frames"], f"cache.{topic_key}.max_frames"),
+            max_age_sec=_convert(float, payload["max_age_sec"], f"cache.{topic_key}.max_age_sec"),
+        )
     return result
 
 
@@ -166,7 +237,14 @@ def _parse_pipelines(raw_pipelines: Dict[str, Any], topics: Dict[str, TopicConfi
                 outputs=dict(node_payload.get("outputs") or {}),
                 config=dict(node_payload.get("config") or {}),
             )
-            _validate_node_config(name, node_config, topics)
+            if node_config.node_type not in NODE_TYPES:
+                raise ConfigError(f"pipeline {name} node {node_id} unknown node type: {node_config.node_type}")
+            try:
+                _validate_node_config(name, node_config, topics)
+            except ConfigError:
+                raise
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ConfigError(f"pipeline {name} node {node_id}: {exc}") from exc
             nodes_by_id[node_id] = node_config
         predecessors: Dict[str, List[str]] = defaultdict(list)
         successors: Dict[str, List[str]] = defaultdict(list)
@@ -185,6 +263,7 @@ def _parse_pipelines(raw_pipelines: Dict[str, Any], topics: Dict[str, TopicConfi
         precheck_topics, time_delay_ms = _parse_pipeline_topic_precheck(name, payload, topics)
         pipelines[name] = PipelineDefinition(
             name=name,
+            description=payload.get("description", ""),
             main_source=main_source,
             nodes_by_id=nodes_by_id,
             predecessors={key: list(value) for key, value in predecessors.items()},
@@ -233,11 +312,11 @@ def _parse_pipeline_topic_precheck(
 def _parse_stop_conditions(pipeline_name: str, payload: Dict[str, Any]) -> StopConditions:
     stop_conditions = StopConditions()
     if "max_duration_sec" in payload:
-        stop_conditions.max_duration_sec = float(payload["max_duration_sec"])
+        stop_conditions.max_duration_sec = _convert(float, payload["max_duration_sec"], f"pipeline {pipeline_name} stop_conditions.max_duration_sec")
         if stop_conditions.max_duration_sec <= 0:
             raise ConfigError(f"pipeline {pipeline_name} max_duration_sec must be > 0")
     if "max_saved_samples" in payload:
-        stop_conditions.max_saved_samples = int(payload["max_saved_samples"])
+        stop_conditions.max_saved_samples = _convert(int, payload["max_saved_samples"], f"pipeline {pipeline_name} stop_conditions.max_saved_samples")
         if stop_conditions.max_saved_samples <= 0:
             raise ConfigError(f"pipeline {pipeline_name} max_saved_samples must be > 0")
     return stop_conditions

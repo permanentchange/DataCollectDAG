@@ -61,7 +61,7 @@ def dummy_session(tmp_path):
     session.cache = SessionInputCache({key: CachePolicy(20, 1.0) for key in topics})
     session.metrics = MetricsRecorder()
     session.app_config = AppConfig(
-        config_path=ROOT / "demo" / "xtreme1_demo.yaml",
+        config_path=ROOT / "demo" / "cfg.yaml",
         output_root_dir=tmp_path,
         ros_node_name="data_collect_dag",
         control=ControlConfig(status_topic="/data_collect/status"),

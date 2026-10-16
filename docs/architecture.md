@@ -5,7 +5,7 @@
 ## 1. 运行路径
 
 ```text
-启动 CLI --config
+启动 CLI run --config
     -> InstanceGuard: 获取完整 ROS 节点名对应的本机锁
     -> AppRuntime: 加载配置、标定并绑定控制队列
     -> RosAdapter: 初始化 ROS，订阅 topic，发布状态
@@ -17,13 +17,13 @@
     -> 匿名 CLI 节点 -> control_topic -> 采集程序的控制队列
 查询 CLI status
     -> 匿名 CLI 节点 <- status_topic <- StatusSnapshot
-离线 CLI --init-demo / --clean
-    -> 导出模板 / 清理会话目录 -> 退出
+离线 CLI init / inspect / clean
+    -> 导出模板 / 静态配置检查 / 清理会话目录 -> 退出
 ```
 
 ### 实例与进程
 
-启动要求 `--config`。CLI 先读取 `ros.node_name`：相对名称使用 `ROS_NAMESPACE`，绝对名称指定完整命名空间；未设置 `ROS_NAMESPACE` 时默认完整名称为 `/data_collect_dag`。初始化 ROS、加载标定和构造运行时之前，以完整名的 SHA256 获取非阻塞独占 `fcntl.flock`，锁路径为 `/tmp/data_collect_dag-<SHA256>.lock`。配置路径、输出路径及用户目录不影响锁的身份。
+`run` 创建采集系统进程，要求 `--config`；`start NAME` 仅控制已有进程中的 pipeline。CLI 先读取 `ros.node_name`：相对名称使用 `ROS_NAMESPACE`，绝对名称指定完整命名空间；未设置 `ROS_NAMESPACE` 时默认完整名称为 `/data_collect_dag`。初始化 ROS、加载标定和构造运行时之前，以完整名的 SHA256 获取非阻塞独占 `fcntl.flock`，锁路径为 `/tmp/data_collect_dag-<SHA256>.lock`。配置路径、输出路径及用户目录不影响锁的身份。
 
 锁在 `IDLE`、`RUNNING` 和 `PAUSED` 时都被持有。重复启动返回非零并报告 `ROS node <完整名称> is already running.`。不同完整节点名可以并存；分别控制时须配置不同的 control/status topic。本机锁在进程退出后释放；保留锁文件以维持后续启动使用同一 inode。互斥范围为本机。
 
@@ -36,6 +36,12 @@
 `pause` 停止接收新帧及启动新样本；`resume` 恢复，活动时长不累计暂停时间。`stop` 结束 session，程序继续接受控制。`shutdown`、SIGINT 和 SIGTERM 通过控制队列收尾并退出整个程序。停止过程请求取消，等待工作线程和已提交的 DAG 任务，并写入会话索引及摘要。
 
 控制客户端按需导入 `ros_control_client.py`，使用匿名 ROS 节点，发送控制 JSON 或读取一次状态；它不创建采集运行时。Topic 覆盖、超时和消息格式见 [ROS 控制接口](ros_external_system_architecture.md)。导出和清理命令见 [README](../README.md)。
+
+### 离线配置检查
+
+`inspect --config CFG [--pipeline NAME]` 复用 `load_app_config`，先校验整个文件再生成摘要。输出包含程序版本、配置及输出路径、存储限制、标定路径、配置中的 ROS 节点名和控制/状态 topic、topic 数量及 pipeline 描述和主数据源；指定 pipeline 时增加预检查、停止条件、节点和边。省略的接口显示为未配置。
+
+静态检查包括结构、引用、节点类型、起止节点、环路、可达性和已实现的节点参数约束。它不导入节点实现、不获取实例锁、不连接 ROS、不读取标定或模型、不创建目录或会话；成功时明确说明 topic 在线情况、消息包、标定/模型加载及 CUDA 未检查。配置错误或未知 pipeline 返回非零；其他 pipeline 的错误也不会被跳过。初始化与查看实现分别位于 `config_templates.py` 和 `config_summary.py`。
 
 ### 数据执行
 
@@ -58,7 +64,7 @@
 | `ros.topics.<key>` | 非空 topic 集合；每项定义 `topic`、`msg_type`、`role`；`sensor_name` 默认使用 key |
 | `cache.defaults_by_role` / `cache.topic_overrides` | 按 role 定义每个 topic 的 `max_frames`、`max_age_sec`，再按 topic 覆盖 |
 | `runtime` | 线程、队列、延时、超时配置 |
-| `pipelines.<name>` | `main_source`、`nodes`、`edges`，以及可选前置检查和结束条件 |
+| `pipelines.<name>` | `main_source`、`nodes`、`edges`，以及可选 `description`、前置检查和结束条件 |
 
 运行时默认值：
 
@@ -73,15 +79,15 @@
 
 `sample_workers`、`node_workers`、`main_frame_queue_size` 必须大于等于 1，`stop_timeout_sec` 必须大于 0。此超时用于工作线程的部分等待；节点线程池退出仍会等待已提交任务，因此不是整个程序退出的总时限。
 
-`demo/cfg.yaml` 使用 `debug: true`、`sample_workers: 1`、`node_workers: 4`、队列大小 `2`、主帧延时 `20` 毫秒和停止等待 `1.0` 秒。
+`demo/cfg.yaml` 使用 `debug: true`、`sample_workers: 1`、`node_workers: 2`、队列大小 `2`、主帧延时 `20` 毫秒和停止等待 `1.0` 秒。
 
 两个容量参数使用十进制 GB（1,000,000,000 字节），接受有限的非负数；省略、`null` 或 `0` 关闭对应检查。比较使用未舍入的容量：目录大小大于等于 limit 拒绝启动，空闲空间小于 need 拒绝启动。检查在创建会话目录之前执行；root_dir 不存在时视为零大小，在最近存在的父目录查询空闲空间。
 
 启用 limit 后，启动时扫描 root_dir，统计所有普通文件的逻辑大小（包括其他文件、诊断和日志），不跟随符号链接。写入增量与每帧检查使用容量缓存；会话 `debug.log` 和根目录 `background.log` 每秒更新，后台每 30 秒扫描校准外部改动。超限或容量查询失败后停止接收新帧及启动排队样本，等待在途样本结束，再经控制队列结束会话。允许在途数据及收尾文件造成少量超额；此限制不是磁盘配额。status 查询和 ROS 回调不扫描目录。
 
-`--config CONFIG --clean DAY` 仅加载输出配置并清理后退出，不启动运行时；不提供配置会明确报错，不自动选择清理目录。只删除 root_dir 的直接普通会话子目录，完整格式为 `YYYYMMDD_HHMMSS_八位小写十六进制后缀`，按目录名中的有效本地日期判断。DAY=0 删除全部会话目录；DAY=N>0 删除早于今天减去 N−1 天的目录，未来日期保留。其他目录、文件及符号链接保留；root_dir 不存在时成功退出，删除失败返回非零。`--pipeline` 不影响清理。清理应在采集停止时执行。
+`clean --config CONFIG --keep-days N` 仅加载输出配置并清理后退出，不启动运行时；不提供配置会明确报错，不自动选择清理目录。只删除 root_dir 的直接普通会话子目录，完整格式为 `YYYYMMDD_HHMMSS_八位小写十六进制后缀`，按目录名中的有效本地日期判断。N=0 删除全部会话目录；N>0 删除早于今天减去 N−1 天的目录，未来日期保留。其他目录、文件及符号链接保留；root_dir 不存在时成功退出，删除失败返回非零。清理命令不接受 `--pipeline`。清理应在采集停止时执行。
 
-最小配置示例：先准备标定文件、运行 ROS master，并发布相应 topic；通过 `--config CONFIG --pipeline example` 启动。此 DAG 仅接收样本，不保存传感器文件。
+最小配置示例：先准备标定文件、运行 ROS master，并发布相应 topic；通过 `run --config CONFIG --pipeline example` 启动。此 DAG 仅接收样本，不保存传感器文件。
 
 ```yaml
 output:
@@ -115,10 +121,11 @@ pipelines:
       - [start, end]
 ```
 
-**路径规则：** `output.root_dir`、`calibration.path` 在解析 YAML 时使用 `Path.expanduser().resolve()`；YOLO 节点在初始化时展开 `model_path` 的用户目录并检查文件存在。相对路径均以进程当前工作目录为基准，不以 YAML 文件所在目录为基准。仓库示例从仓库根目录启动；`--init-demo` 导出的标定和模型路径已经是绝对路径，可从任意工作目录启动。
+**路径规则：** `output.root_dir`、`calibration.path` 在解析 YAML 时使用 `Path.expanduser().resolve()`；YOLO 节点在初始化时展开 `model_path` 的用户目录并检查文件存在。相对路径均以进程当前工作目录为基准，不以 YAML 文件所在目录为基准。仓库示例从仓库根目录启动；`init` 导出的标定和模型路径已经是绝对路径，可从任意工作目录启动。
 
 ### Pipeline 规则
 
+- `description` 是可选字符串，省略时为空字符串；解析后保存在 `PipelineDefinition.description`，供 `inspect` 展示。
 - `main_source` 必须是 `ros.topics` 中已定义的 topic key。
 - `nodes` 中必须恰有一个 `type: start` 和一个 `type: end`；`edges` 引用的节点必须存在；图必须无环，且每个节点都可从 start 到达并可到达 end。
 - 每个节点要求 `node_id` 和 `type`，可配置 `inputs`、`outputs` 和 `config`；`inputs` / `outputs` 的值是样本上下文中的键名。
@@ -132,7 +139,7 @@ pipelines:
 
 ## 3. 内置节点
 
-节点注册表为 `session.py::NODE_TYPES`：
+节点名称与模块、类加载信息统一定义于轻量注册表 `node_registry.py::NODE_TYPES`，配置解析拒绝未知类型，运行时按需加载节点实现：
 
 | 类别 | 节点类型 | 功能 |
 | --- | --- | --- |
@@ -186,4 +193,6 @@ JPEG 质量为 95。ASCII PCD 字段为 `x y z intensity has_intensity`：有效
 
 ROS 安装、Master、自定义消息包、传感器 topic、标定源文件和模型权重由运行环境提供。节点类型使用源码中的固定注册表。
 
-构建后端在 wheel 中生成 `data_collect_dag/_demo.zip`，收录 demo YAML 和 `calibration/` 下的 JSON；源码包通过 `MANIFEST.in` 收录同一组模板。模型权重、ROS bag 和采集输出不打包。`--init-demo` 从可编辑 checkout 或安装包资源导出模板；安装及升级不修改已导出的配置。
+构建后端在 wheel 中生成 `data_collect_dag/_demo.zip`，收录 demo YAML 和 `calibration/` 下的 JSON；源码包通过 `MANIFEST.in` 收录同一组模板。模型权重、ROS bag 和采集输出不打包。`init` 从可编辑 checkout 或安装包资源导出模板；安装及升级不修改已导出的配置。
+
+模板读取和导出实现在 `config_templates.py`。Python 接口为 `export_config_templates(destination: Path, force: bool = False, car_id: Optional[str] = None) -> Path`，返回展开用户目录并解析后的目标路径。不指定车辆时导出全部标定并选择 SA4；指定车辆时只导出对应标定，配置和模型引用改为绝对路径。覆盖前检查目标路径，每个模板文件以原子替换方式更新；无关文件、未选择车辆的标定及模型权重保留。CLI 初始化成功后使用实际导出的配置显示路径、车辆和 pipeline 名称。

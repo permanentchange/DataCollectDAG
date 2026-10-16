@@ -4,7 +4,7 @@ DataCollectDAG 在 ROS1 Noetic 中作为一个 ROS node 运行。外部系统通
 
 ## 接口配置
 
-`demo/cfg.yaml` 及 `--init-demo` 导出的配置使用：
+`demo/cfg.yaml` 及 `init` 导出的配置使用：
 
 ```yaml
 ros:
@@ -39,7 +39,7 @@ ros:
 
 收到 `start` 时先验证目标 pipeline 名称，存在才结束当前 session 并启动新 session。目标不存在时记录 `last_error`，保留活动 session 的运行或暂停状态及 session id，计数不重置。目标存在但初始化失败时，原 session 已结束，工具进入 `IDLE` 并报告错误。
 
-CLI 可直接复用这些 topic，无需配置文件；默认 `/data_collect/control` 和 `/data_collect/status`，可用 `--control-topic TOPIC`、`--status-topic TOPIC` 覆盖：
+CLI 可直接复用这些 topic，无需配置文件；默认 `/data_collect/control` 和 `/data_collect/status`。`start`、`pause`、`resume`、`stop`、`shutdown` 接受 `--control-topic TOPIC`；`status` 接受 `--status-topic TOPIC`：
 
 ```bash
 data_collect_dag start fps
@@ -48,6 +48,13 @@ data_collect_dag resume
 data_collect_dag stop
 data_collect_dag status
 data_collect_dag shutdown
+```
+
+`run --config CFG [--pipeline NAME] [--background]` 创建采集系统进程；`start NAME` 仅向已有实例发送指令。不存在运行实例时，控制客户端等待超时并返回失败，不会创建采集进程。自定义 topic 示例：
+
+```bash
+data_collect_dag start fps --control-topic /vehicle/control --timeout 5
+data_collect_dag status --status-topic /vehicle/status --timeout 5
 ```
 
 客户端使用独立匿名 ROS 节点，不加载采集配置、标定、DAG 或推理模型。发送命令前检查 Master 并等待控制订阅者；`status` 等待状态消息及活动发布连接。`--timeout SEC` 为有限正数，默认 5 秒，分别用于 Master 检查和 topic 连接/消息等待。超时、无目标接口或检测到发送失败时返回非零。
@@ -145,7 +152,9 @@ rostopic echo /data_collect/status
 
 实例锁获取、YAML 解析、标定加载、Master 连接和 message class 解析发生在状态接口就绪之前；失败时启动进程返回非零，通过终端输出或后台日志诊断。后台父进程的零退出码及 PID 只表示子进程已创建。
 
-ROS 接口就绪后的 Pipeline 容量检查、topic 预检查和节点初始化错误通过 `last_error` 及进程日志报告；进程继续接受控制。`--init-demo` 和 `--clean` 不启动 ROS 接口。
+ROS 接口就绪后的 Pipeline 容量检查、topic 预检查和节点初始化错误通过 `last_error` 及进程日志报告；进程继续接受控制。`init`、`inspect` 和 `clean` 不启动 ROS 接口。
+
+`inspect --config CFG [--pipeline NAME]` 只读取并静态校验整个配置，不查询运行实例，也不检查 topic 在线情况、消息包、标定/模型加载或 CUDA。查看当前实例使用 `status`；离线配置摘要及错误边界见 [配置检查](../README.md#inspect-configuration-offline)。
 
 ## 读取输出
 

@@ -1,90 +1,60 @@
-"""Action-specific CLI guidance must fail before doing any work."""
-
+"""Subcommand arguments fail before runtime or file work."""
 import sys
 
 import pytest
 
-from data_collect_dag.cli import main
+from data_collect_dag import __version__
+from data_collect_dag.cli import build_parser, main
 
 
-@pytest.fixture
-def no_cli_work(monkeypatch):
+@pytest.mark.parametrize("arguments", [
+    [], ["--config", "cfg.yaml"], ["--init-demo", "config"], ["--clean", "0"],
+    ["run"], ["inspect"], ["init"], ["clean", "--config", "cfg.yaml"],
+    ["run", "--config", "cfg.yaml", "--force"],
+    ["run", "--config", "cfg.yaml", "--car-id", "sa4"],
+    ["init", "config", "--pipeline", "fps"], ["init", "config", "--background"],
+    ["inspect", "--config", "cfg.yaml", "--background"],
+    ["clean", "--config", "cfg.yaml", "--keep-days", "-1"],
+    ["clean", "--config", "cfg.yaml", "--keep-days", "1.5"],
+    ["clean", "--config", "cfg.yaml", "--keep-days", "0", "--pipeline", "fps"],
+    ["status", "--control-topic", "/control"], ["pause", "--status-topic", "/status"],
+    ["run", "--config", "cfg.yaml", "--background", "--instance-lock-fd", "3"],
+])
+def test_invalid_arguments_do_no_work(arguments, monkeypatch, tmp_path):
     def forbidden(*args, **kwargs):
-        raise AssertionError("help and invalid arguments must not perform any work")
-
-    for name in ["data_collect_dag.app.AppRuntime", "data_collect_dag.config.load_output_config",
-                 "data_collect_dag.storage.clean_sessions", "data_collect_dag.cli.start_background",
-                 "data_collect_dag.demo_templates.export_demo", "data_collect_dag.cli.load_node_name"]:
-        monkeypatch.setattr(name, forbidden)
-
-
-@pytest.mark.parametrize("arguments,message", [
-    ([], "provide --config CONFIG to run collection, or --init-demo DIR to export templates; see --help"),
-    (["--clean", "1"], "--clean requires --config CONFIG to determine output.root_dir"),
-    (["--clean", "0"], "--clean requires --config CONFIG to determine output.root_dir"),
-    (["--background"], "--background requires --config CONFIG"),
-    (["--pipeline", "fps"], "--config CONFIG is required to run collection"),
-    (["--pipeline", "init"], "--config CONFIG is required to run collection"),
-    (["--force"], "--force requires --init-demo"),
-    (["--config", "cfg.yaml", "--force"], "--force requires --init-demo"),
-    (["--car-id", "sa4"], "--car-id requires --init-demo"),
-    (["--config", "cfg.yaml", "--car-id", "sa4"], "--car-id requires --init-demo"),
-    (["--config", "cfg.yaml", "--clean", "1", "--car-id", "sa4"], "--car-id requires --init-demo"),
-    (["--init-demo", "demo", "--clean", "0"], "--init-demo cannot be combined with --clean"),
-    (["--init-demo", "demo", "--background"], "--init-demo cannot be combined with --background"),
-])
-def test_action_specific_errors(arguments, message, no_cli_work, tmp_path, monkeypatch, capsys):
+        raise AssertionError("invalid arguments must not dispatch")
+    for name in ("_init", "_inspect", "_run", "_clean", "_control"):
+        monkeypatch.setattr("data_collect_dag.cli." + name, forbidden)
     monkeypatch.chdir(tmp_path)
-    session = tmp_path / "output/20250101_120000_abcdef12"
-    session.mkdir(parents=True)
-    sentinel = session / "data"
-    sentinel.write_bytes(b"preserve collected data")
     monkeypatch.setattr(sys, "argv", ["data_collect_dag"] + arguments)
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 2
-    captured = capsys.readouterr()
-    assert "error: " + message in captured.err
-    assert "one of the arguments --config --init-demo is required" not in captured.err
-    assert not captured.out
-    assert sentinel.read_bytes() == b"preserve collected data"
-    assert not (tmp_path / "demo").exists()
+    assert not list(tmp_path.iterdir())
 
 
-@pytest.mark.parametrize("arguments,message", [
-    (["--clean"], "argument --clean: expected one argument"),
-    (["--init-demo", "demo", "--car-id"], "argument --car-id: expected one argument"),
-    (["--config", "cfg.yaml", "--clean", "-1"], "--clean must be a non-negative integer"),
-    (["--config", "cfg.yaml", "--clean", "1.5"], "--clean must be a non-negative integer"),
-    (["--config", "cfg.yaml", "--init-demo", "demo"], "not allowed with argument --config"),
-    (["--config", "cfg.yaml", "--clean", "0", "--background"], "not allowed with argument --clean"),
-])
-def test_argparse_validation_is_preserved(arguments, message, no_cli_work, monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["data_collect_dag"] + arguments)
-    with pytest.raises(SystemExit) as error:
-        main()
-    assert error.value.code == 2
-    assert message in capsys.readouterr().err
-
-
-def test_help_lists_operation_forms_and_requirements(no_cli_work, monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--help"])
+@pytest.mark.parametrize("command", [None, "init", "inspect", "run", "clean", "start", "pause", "resume", "stop", "shutdown", "status"])
+def test_help(command, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag"] + ([command] if command else []) + ["--help"])
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 0
-    captured = capsys.readouterr()
-    assert not captured.err
-    for text in [
-        "data_collect_dag --config CONFIG [--pipeline PIPELINE] [--background]",
-        "data_collect_dag --config CONFIG --clean DAY",
-        "data_collect_dag --init-demo DIR [--car-id CAR_ID] [--force]",
-        "YAML configuration file; required for collection and cleanup",
-        "no config or ROS needed",
-        "default: init",
-        "ignored during cleanup/export",
-        "0=delete all, 1=keep today, 2=keep today and yesterday",
-        "requires --config; stop collection before cleanup",
-        "only valid with --init-demo",
-        "if omitted, export all cars and use sa4 in the configuration",
-    ]:
-        assert text in captured.out
+    output = capsys.readouterr()
+    assert not output.err
+    assert "usage:" in output.out
+    if command is None:
+        assert all(name in output.out for name in ("init", "inspect", "run", "clean", "status"))
+        assert "--config" not in output.out
+
+
+def test_version(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--version"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 0
+    assert __version__ in capsys.readouterr().out
+
+
+def test_run_defaults_and_control_timeout():
+    assert build_parser().parse_args(["run", "--config", "cfg.yaml"]).pipeline == "init"
+    assert build_parser().parse_args(["status"]).timeout == 5.0

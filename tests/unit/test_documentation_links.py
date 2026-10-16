@@ -9,9 +9,9 @@ import yaml
 
 from data_collect_dag.app import build_parser
 from data_collect_dag.config import load_app_config
-from data_collect_dag.demo_templates import available_car_ids, read_templates
+from data_collect_dag.config_templates import available_car_ids, read_templates
 from data_collect_dag.models import StatusSnapshot
-from data_collect_dag.session import NODE_TYPES
+from data_collect_dag.node_registry import NODE_TYPES
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -80,9 +80,9 @@ def test_readme_cli_examples_parse_and_select_bundled_cars():
                 # --help is itself a valid documented command.
                 assert error.code == 0
                 continue
-            assert args.config is not None or args.init_demo is not None or args.command is not None
-            if args.car_id is not None:
-                assert args.init_demo is not None and args.car_id.lower() in cars
+            assert args.command is not None
+            if getattr(args, "car_id", None) is not None:
+                assert args.command == "init" and args.car_id.lower() in cars
             examples += 1
     assert examples >= 5
 

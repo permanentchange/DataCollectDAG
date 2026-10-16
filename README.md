@@ -8,7 +8,7 @@ DataCollectDAG is a Python 3.8 / ROS1 Noetic application for collecting sensor d
 - A running ROS master and the message packages referenced by the YAML. Build custom packages such as `bdstar` and `igv_msgs` in a catkin workspace and source its setup script.
 - Readable calibration JSON and the live topics required by the selected pipeline. Bags, model weights and vehicle source files are external resources.
 
-The base package depends on NumPy, PyYAML, Pillow, OpenCV and rospkg. Inference packages are optional and loaded when a YOLO node is initialized. Template export and cleanup run without a ROS master.
+The base package depends on NumPy, PyYAML, Pillow, OpenCV and rospkg. Inference packages are optional and loaded when a YOLO node is initialized. Configuration initialization, inspection and cleanup run without a ROS master.
 
 ## Install
 
@@ -55,12 +55,12 @@ Choose one ONNX Runtime extra for the target device. ONNX models run through Ult
 
 For Jetson YOLO installations, `bash setup.bash arm` reinstalls device-compatible `torch` and `torchvision` wheels from `~/wheels`, then installs the YOLO extra with those versions constrained. Both wheels must exist before uninstalling packages. The script selects its preferred filenames or a single wheel per package. Set `DCD_WHEEL_DIR`, `DCD_TORCH_WHEEL` and `DCD_TORCHVISION_WHEEL` to choose specific compatible builds. Match Python, JetPack and CUDA to the device.
 
-## Export a demo
+## Initialize configuration
 
 Wheel and source distributions bundle demo YAML and vehicle calibration JSON. Export them to a working directory:
 
 ```bash
-data_collect_dag --init-demo ~/dcd-demo --car-id sa4
+data_collect_dag init ~/data_collect_config --car-id sa4
 ```
 
 Car IDs are case-insensitive. Omitting `--car-id` exports all available calibrations and selects SA4 in the YAML. Unknown IDs fail before writing and list the available cars. The export includes all bundled YAML files, the selected `calibration/<car-id>/cali.json` files and a `models/` directory for your weights. Calibration paths and `demo/` model references in exported YAML are absolute; `output.root_dir` and other settings retain their configured values.
@@ -68,10 +68,35 @@ Car IDs are case-insensitive. Omitting `--car-id` exports all available calibrat
 Existing template filenames require `--force`:
 
 ```bash
-data_collect_dag --init-demo ~/dcd-demo --car-id sa14 --force
+data_collect_dag init ~/data_collect_config --car-id sa14 --force
 ```
 
 `--force` replaces exported template files and preserves unrelated files, other car directories and model weights. Directory symlinks escaping the destination are rejected. Editable installations export the checkout's demo files; ordinary installations export packaged templates. Review topics, calibration and storage settings before collecting. If you move the export directory, update its absolute references or export again.
+
+Python callers can use the same exporter, which returns the resolved destination as a `Path`:
+
+```python
+from pathlib import Path
+from data_collect_dag.config_templates import export_config_templates
+
+destination = export_config_templates(
+    Path.home() / "data_collect_config",
+    car_id="sa4",
+)
+```
+
+The Python interface also accepts `force=True` for the same template replacement behavior.
+
+## Inspect configuration offline
+
+```bash
+data_collect_dag inspect --config ~/data_collect_config/cfg.yaml
+data_collect_dag inspect --config ~/data_collect_config/cfg.yaml --pipeline fps_undist_nomotion
+```
+
+`inspect` validates the entire file with the same static parser used at startup, then displays its absolute path, program version, output/storage settings, calibration path, configured ROS node and control/status topics, topic count, and pipeline names, descriptions and main sources. Selecting a pipeline adds its topic precheck, wait time, stop conditions, node IDs/types and DAG edges. A broken unselected pipeline also fails validation; an unknown selection lists available names.
+
+A static PASS does not check live topics, ROS message packages, calibration/model loading or CUDA. Inspection is offline and read-only: it creates no output directory or session and imports no ROS or inference runtime. It does not require calibration/model files to exist. Use `status` to query a running process. Invalid arguments return exit code 2; configuration or operation failures return 1; successful operations return 0.
 
 ## Start and control
 
@@ -79,24 +104,34 @@ Start `roscore` in a separate ROS-enabled terminal. Source ROS and any custom me
 
 ```bash
 # Start with the default init pipeline:
-data_collect_dag --config demo/cfg.yaml
-# Or start a collection pipeline in the background:
-data_collect_dag --config demo/cfg.yaml --pipeline fps_undist --background
+data_collect_dag run --config demo/cfg.yaml
+# Or use the configuration exported above to collect in the background:
+data_collect_dag run --config ~/data_collect_config/cfg.yaml --pipeline fps_undist_nomotion --background
 tail -f ~/DATA_COLLECT/background.log
 ```
 
 The CLI supports these forms, also available through `/usr/bin/python3 -m data_collect_dag`:
 
 ```text
-data_collect_dag --config CONFIG [--pipeline PIPELINE] [--background]
+data_collect_dag init DIR [--car-id CAR_ID] [--force]
+data_collect_dag inspect --config CFG [--pipeline NAME]
+data_collect_dag run --config CFG [--pipeline NAME] [--background]
 data_collect_dag start PIPELINE [--control-topic TOPIC] [--timeout SEC]
 data_collect_dag {pause,resume,stop,shutdown} [--control-topic TOPIC] [--timeout SEC]
 data_collect_dag status [--status-topic TOPIC] [--timeout SEC]
-data_collect_dag --config CONFIG --clean DAY
-data_collect_dag --init-demo DIR [--car-id CAR_ID] [--force]
+data_collect_dag clean --config CONFIG --keep-days N
 ```
 
-Startup and cleanup require `--config`; control and export commands use no collection configuration. `--pipeline` defaults to `init` at startup and is ignored during cleanup/export. Control commands cannot be combined with startup, cleanup or export options. `--force` and `--car-id` apply only to export; export cannot be combined with `--config`, `--clean` or `--background`.
+Each command owns its arguments. `run` creates a process and defaults to pipeline `init`; `start NAME` only controls an existing process and never launches one. `init` exports the installed version's templates; it does not upgrade the program, download weights or start collection. Root options are `--help` and `--version`; each subcommand has its own `--help`. `--config` belongs to `run`, `inspect` and `clean`; `--pipeline` belongs to `run` and `inspect`; `--background` belongs to `run`; `--car-id` and `--force` belong to `init`.
+
+```bash
+data_collect_dag --version
+data_collect_dag init --help
+data_collect_dag inspect --help
+data_collect_dag run --help
+```
+
+Installation and upgrades do not update configurations already exported. After upgrading, use `init DIR --force` to replace template files; preserve any custom configuration edits first. Initialization prints the actual configuration path, calibration selection and pipeline names.
 
 On one Linux device, each fully resolved `ros.node_name` permits one instance, including while `IDLE`. Relative names use `ROS_NAMESPACE`; absolute names specify their namespace. Foreground and background startup acquire the same local lock before initializing ROS or loading calibration. Different node names can run together; give them distinct control/status topics to control them separately.
 
@@ -115,7 +150,7 @@ data_collect_dag shutdown
 
 `start` checks the pipeline name before replacing the current session. An unknown name preserves the active session, including its paused state, and records `last_error`. `stop` ends the session and leaves the program available for another `start`. `shutdown` ends the session, writes its summary and exits. Foreground Ctrl+C and `kill -TERM PID` also request cleanup and exit.
 
-The anonymous control client uses `/data_collect/control` and `/data_collect/status` by default. Match custom YAML topics with CLI overrides:
+The anonymous control client uses `/data_collect/control` and `/data_collect/status` by default. Write commands accept `--control-topic`; `status` accepts `--status-topic`. Match custom YAML topics with CLI overrides:
 
 ```bash
 data_collect_dag start fps --control-topic /vehicle/control --timeout 5
@@ -138,7 +173,7 @@ The client loads no collection YAML, calibration, DAG or inference model. `--tim
 Collection pipelines have a 6,000-second active-duration limit. Completed or failed sessions leave the program available for control. Startup resolves message types for every configured `ros.topics` entry. Demo pipelines precheck configured topics for new messages within 500 ms on each session start. `fps_undist_nomotion` checks only the five cameras and five lidars; it needs no incoming localization, IMU, odometry or NMEA messages. It transforms each lidar into `base` using static calibration and merges the clouds without ego-motion compensation.
 
 ```bash
-data_collect_dag --config demo/cfg.yaml --pipeline fps_undist_nomotion
+data_collect_dag run --config demo/cfg.yaml --pipeline fps_undist_nomotion
 # Or control an instance started with this pipeline in its configuration:
 data_collect_dag start fps_undist_nomotion
 ```
@@ -158,10 +193,10 @@ At startup, output size at or above the limit or free space below the requiremen
 Clean session directories while collection is stopped:
 
 ```bash
-data_collect_dag --config demo/cfg.yaml --clean 2
+data_collect_dag clean --config demo/cfg.yaml --keep-days 2
 ```
 
-`--clean` exits after cleanup and needs only the output configuration. `0` removes all valid session directories, `1` keeps today, and `2` keeps today and yesterday. The date comes from the local-time directory name `YYYYMMDD_HHMMSS_<eight lowercase hex digits>`. For positive values, future dates are preserved. Unrelated files/directories and symbolic links are preserved; failures return nonzero.
+`clean` exits after cleanup and needs only the output configuration. `0` removes all valid session directories, `1` keeps today, and `2` keeps today and yesterday. The date comes from the local-time directory name `YYYYMMDD_HHMMSS_<eight lowercase hex digits>`. For positive values, future dates are preserved. Unrelated files/directories and symbolic links are preserved; failures return nonzero.
 
 ## Calibration and results
 

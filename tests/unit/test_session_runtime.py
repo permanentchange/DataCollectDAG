@@ -12,7 +12,8 @@ import pytest
 from data_collect_dag.control import ControlCommand
 from data_collect_dag.models import AppConfig, CachePolicy, ControlConfig, MainFrameEvent, NodeConfig, PipelineDefinition, RecentSessionStatus, RuntimeConfig, StopConditions, TopicConfig
 from data_collect_dag.ros_adapter import RosAdapter
-from data_collect_dag.session import NODE_TYPES, SessionManager, SessionRuntime
+from data_collect_dag.node_registry import load_node_type
+from data_collect_dag.session import SessionManager, SessionRuntime
 from data_collect_dag.status import StatusManager
 from tests.unit.conftest import make_meta
 
@@ -189,7 +190,7 @@ def test_node_that_raises_during_setup_is_included_in_start_rollback(tmp_path, m
         def teardown(self):
             teardown_calls.append(self.node_id)
 
-    monkeypatch.setitem(NODE_TYPES, "partial_setup", _PartialSetupNode)
+    monkeypatch.setattr("data_collect_dag.session.load_node_type", lambda name: _PartialSetupNode if name == "partial_setup" else load_node_type(name))
     session.pipeline.nodes_by_id = {
         "partial": NodeConfig(
             node_id="partial",

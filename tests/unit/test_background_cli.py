@@ -24,13 +24,13 @@ def test_background_launch_uses_current_python_and_detaches(tmp_path, monkeypatc
         kwargs["stdout"].write(b"new output\n")
         return SimpleNamespace(pid=31415)
     monkeypatch.setattr("data_collect_dag.cli.subprocess.Popen", popen)
-    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", "config.yaml", "--pipeline", "fps", "--background"])
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "run", "--config", "config.yaml", "--pipeline", "fps", "--background"])
     def forbidden(*args, **kwargs):
         raise AssertionError("parent must not construct a runtime")
     monkeypatch.setattr("data_collect_dag.app.AppRuntime", forbidden)
     assert main() == 0
     command, kwargs = calls[0]
-    assert command == [sys.executable, "-u", "-m", "data_collect_dag", "--config", str(config), "--pipeline", "fps", "--instance-lock-fd", str(kwargs["pass_fds"][0])]
+    assert command == [sys.executable, "-u", "-m", "data_collect_dag", "run", "--config", str(config), "--pipeline", "fps", "--instance-lock-fd", str(kwargs["pass_fds"][0])]
     assert kwargs["start_new_session"] is True and kwargs["close_fds"] is True
     assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["stderr"] == subprocess.STDOUT
     assert "cwd" not in kwargs and "env" not in kwargs
@@ -54,14 +54,14 @@ def test_background_launch_reports_errors(tmp_path, monkeypatch, capsys, failure
             raise OSError("spawn failed")
         raise AssertionError("invalid config/output must fail before spawning")
     monkeypatch.setattr("data_collect_dag.cli.subprocess.Popen", popen)
-    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", str(config), "--background"])
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "run", "--config", str(config), "--background"])
     assert main() == 1
     assert "background launch failed:" in capsys.readouterr().err
 
 
 def test_background_and_clean_are_mutually_exclusive():
     with pytest.raises(SystemExit) as exc:
-        build_parser().parse_args(["--config", "config.yaml", "--clean", "0", "--background"])
+        build_parser().parse_args(["clean", "--config", "config.yaml", "--keep-days", "0", "--background"])
     assert exc.value.code == 2
 
 
@@ -76,7 +76,7 @@ def test_foreground_remains_default(tmp_path, monkeypatch):
         def run(self):
             return 7
     monkeypatch.setattr("data_collect_dag.app.AppRuntime", Runtime)
-    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", "config.yaml"])
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "run", "--config", "config.yaml"])
     assert main() == 7
     assert calls == [{"config_path": Path("config.yaml"), "pipeline_name": "init"}]
 
@@ -87,7 +87,7 @@ def test_duplicate_is_rejected_before_runtime_initialization(tmp_path, monkeypat
     def forbidden(**kwargs):
         raise AssertionError("duplicate must fail before runtime construction")
     monkeypatch.setattr("data_collect_dag.app.AppRuntime", forbidden)
-    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", str(config)])
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "run", "--config", str(config)])
     with InstanceGuard(load_node_name(config)):
         assert main() == 1
     assert "is already running" in capsys.readouterr().err
@@ -102,7 +102,7 @@ def test_config_name_change_cannot_start_under_wrong_lock(tmp_path, monkeypatch,
         def run(self):
             raise AssertionError("must not initialize ROS with an unguarded name")
     monkeypatch.setattr("data_collect_dag.app.AppRuntime", Runtime)
-    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", str(config)])
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "run", "--config", str(config)])
     assert main() == 1
     assert "ros.node_name changed" in capsys.readouterr().err
     with InstanceGuard(load_node_name(config)):

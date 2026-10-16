@@ -107,10 +107,10 @@ sys.path = [entry for entry in sys.path if entry not in previous_paths] + previo
 import data_collect_dag
 assert Path(data_collect_dag.__file__).parent.parent.parent == Path(os.environ["DCD_SOURCE"])
 assert data_collect_dag.__version__ == os.environ["DCD_EXPECTED_VERSION"]
-from data_collect_dag.demo_templates import export_demo
-export_demo(Path("editable-export"))
+from data_collect_dag.config_templates import export_config_templates
+export_config_templates(Path("editable-export"))
 assert Path("editable-export/live.yaml").read_text() == "editable_revision: live\n"
-export_demo(Path("editable-sa14"), car_id="SA14")
+export_config_templates(Path("editable-sa14"), car_id="SA14")
 assert {path.name for path in Path("editable-sa14/calibration").iterdir()} == {"sa14"}
 '''], tmp_path)
     installed = tmp_path / "installed"
@@ -138,20 +138,38 @@ assert Path(data_collect_dag.__file__).parent.parent == Path(os.environ["DCD_INS
 from importlib import metadata
 assert data_collect_dag.__version__ == metadata.version("data-collect-dag") == os.environ["DCD_EXPECTED_VERSION"]
 from data_collect_dag.cli import main
-from data_collect_dag.demo_templates import available_car_ids, read_templates
-sys.argv = ["data_collect_dag", "--init-demo", "exported"]
+from data_collect_dag.config_templates import available_car_ids, read_templates
+sys.argv = ["data_collect_dag", "init", "exported"]
 assert main() == 0
+for selection in ([], ["--pipeline", "fps_undist_nomotion"]):
+    sys.argv = ["data_collect_dag", "inspect", "--config", "exported/cfg.yaml"] + selection
+    assert main() == 0
+assert not {"data_collect_dag.app", "data_collect_dag.session", "data_collect_dag.nodes"}.intersection(sys.modules)
+from importlib.util import find_spec
+assert find_spec("data_collect_dag.demo_templates") is None
 from data_collect_dag.app import load_calibration
 from data_collect_dag.config import load_app_config
 config = load_app_config(Path("exported/cfg.yaml"))
 assert config.calibration_path == Path.cwd() / "exported/calibration/sa4/cali.json"
 assert {path.name for path in Path("exported/calibration").iterdir()} == set(available_car_ids(read_templates()))
 assert load_calibration(config.calibration_path)["images"]
-assert "fps_undist" in config.pipelines
+assert "fps_undist_nomotion" in config.pipelines
 assert not config.calibration_path.is_symlink()
 assert not list(Path("exported/models").iterdir())
+Path("exported/cfg.yaml").write_text("outdated: configuration\n")
+Path("exported/custom.txt").write_bytes(b"user data")
+Path("exported/models/yolo26m.pt").write_bytes(b"user weights")
+Path("exported/calibration/sa4/cali.json").write_bytes(b"user SA4 calibration")
+sys.argv = ["data_collect_dag", "init", "exported", "--car-id", "SA20", "--force"]
+assert main() == 0
+refreshed = load_app_config(Path("exported/cfg.yaml"))
+assert "fps_undist_nomotion" in refreshed.pipelines
+assert refreshed.calibration_path == Path.cwd() / "exported/calibration/sa20/cali.json"
+assert Path("exported/custom.txt").read_bytes() == b"user data"
+assert Path("exported/models/yolo26m.pt").read_bytes() == b"user weights"
+assert Path("exported/calibration/sa4/cali.json").read_bytes() == b"user SA4 calibration"
 for car in ["sa4", "sa14"]:
-    sys.argv = ["data_collect_dag", "--init-demo", car, "--car-id", car.upper()]
+    sys.argv = ["data_collect_dag", "init", car, "--car-id", car.upper()]
     assert main() == 0
     config = load_app_config(Path(car) / "cfg.yaml")
     assert config.calibration_path == Path.cwd() / car / "calibration" / car / "cali.json"
@@ -171,8 +189,8 @@ def test_vcs_install_replaces_lower_version_without_upgrade_flag(tmp_path):
     current_package = package.read_text(encoding="utf-8")
     version = _project_version()
     # Simulate an older release without depending on historical Git objects.
-    project.write_text(current_project.replace('version = "{}"'.format(version), 'version = "0.1.0"'), encoding="utf-8")
-    package.write_text(current_package.replace('__version__ = "{}"'.format(version), '__version__ = "0.1.0"'), encoding="utf-8")
+    project.write_text(current_project.replace('version = "{}"'.format(version), 'version = "0.2.0"'), encoding="utf-8")
+    package.write_text(current_package.replace('__version__ = "{}"'.format(version), '__version__ = "0.2.0"'), encoding="utf-8")
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     env["PIP_NO_INDEX"] = "1"
@@ -195,6 +213,13 @@ def test_vcs_install_replaces_lower_version_without_upgrade_flag(tmp_path):
     # Use the test environment's build tools/pip, but install the project only
     # inside this disposable venv, never into the developer's environment.
     run([sys.executable, "-m", "venv", "--system-site-packages", "--without-pip", str(isolated)])
+    # A nested --system-site-packages venv inherits the base interpreter's
+    # packages, not build tools installed in the invoking test venv. Make the
+    # caller's build tools available without exposing the source checkout.
+    import setuptools
+    import wheel
+    build_paths = {str(Path(module.__file__).resolve().parent.parent) for module in (setuptools, wheel)}
+    env["PYTHONPATH"] = os.pathsep.join(sorted(build_paths))
     python = str(isolated / "bin/python")
     requirement = "git+" + source.as_uri()
     install = [python, "-m", "pip", "install", "--no-deps", "--no-build-isolation", requirement]
@@ -207,7 +232,7 @@ import data_collect_dag
 assert data_collect_dag.__version__ == metadata.version("data-collect-dag") == sys.argv[1]
 assert str(Path(data_collect_dag.__file__).resolve()).startswith(str(Path(sys.prefix).resolve()) + "/")
 '''
-    run([python, "-c", verify, "0.1.0"])
+    run([python, "-c", verify, "0.2.0"])
     project.write_text(current_project, encoding="utf-8")
     package.write_text(current_package, encoding="utf-8")
     commit("current release")
@@ -216,9 +241,10 @@ assert str(Path(data_collect_dag.__file__).resolve()).startswith(str(Path(sys.pr
     run(install)
     run([python, "-c", verify, version])
     help_text = run([python, "-m", "data_collect_dag", "--help"])
-    assert "--car-id CAR_ID" in help_text
+    assert "inspect" in help_text
+    assert "--car-id CAR_ID" in run([python, "-m", "data_collect_dag", "init", "--help"])
     destination = tmp_path / "exported"
-    run([python, "-m", "data_collect_dag", "--init-demo", str(destination), "--car-id", "sa14"])
+    run([python, "-m", "data_collect_dag", "init", str(destination), "--car-id", "sa14"])
     assert {path.name for path in (destination / "calibration").iterdir()} == {"sa14"}
     run([python, "-c", r'''
 import sys

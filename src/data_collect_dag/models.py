@@ -194,6 +194,7 @@ class PipelineDefinition:
     stop_conditions: "StopConditions" = None
     topics: List[str] = field(default_factory=list)
     time_delay_ms: Optional[int] = None
+    description: str = ""
 
 
 @dataclass

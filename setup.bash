@@ -121,4 +121,4 @@ PY
         ;;
 esac
 
-echo "Installed. Export bundled configs with: data_collect_dag --init-demo DIR [--car-id CAR_ID]. Supply model weights separately."
+echo "Installed. Export bundled configs with: data_collect_dag init DIR [--car-id CAR_ID]. Supply model weights separately."

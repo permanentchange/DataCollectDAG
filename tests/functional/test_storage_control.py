@@ -13,7 +13,7 @@ from data_collect_dag.cli import main
 from data_collect_dag.control import ControlCommand
 from data_collect_dag.models import FrameMeta
 from data_collect_dag.nodes.base import BaseNode
-from data_collect_dag.session import NODE_TYPES
+from data_collect_dag.node_registry import load_node_type
 from data_collect_dag.storage import tracked_write
 
 
@@ -65,7 +65,7 @@ def test_clean_cli_without_ros_or_pipeline(tmp_path, monkeypatch, capsys):
     (session / "data").write_text("test data")
     config = tmp_path / "clean.yaml"
     config.write_text(f"output:\n  root_dir: {root}\n")
-    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "--config", str(config), "--pipeline", "missing", "--clean", "0"])
+    monkeypatch.setattr(sys, "argv", ["data_collect_dag", "clean", "--config", str(config), "--keep-days", "0"])
     def forbidden(*args, **kwargs):
         raise AssertionError("cleanup must not construct a ROS runtime")
     monkeypatch.setattr("data_collect_dag.app.AppRuntime", forbidden)
@@ -144,7 +144,7 @@ def test_limit_drains_two_inflight_samples_and_stops_queued_sample(runtime, monk
             sample.metadata["save_result"] = {"saved": True}
             return self.ok()
 
-    monkeypatch.setitem(NODE_TYPES, "end", SavingNode)
+    monkeypatch.setattr("data_collect_dag.session.load_node_type", lambda name: SavingNode if name == "end" else load_node_type(name))
     session = _start(runtime)
     def frame(timestamp):
         return SimpleNamespace(meta=FrameMeta("camera", "/camera", "camera", "image", timestamp, timestamp))
