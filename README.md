@@ -104,9 +104,9 @@ Start `roscore` in a separate ROS-enabled terminal. Source ROS and any custom me
 
 ```bash
 # Start with the default init pipeline:
-data_collect_dag run --config demo/cfg.yaml
+data_collect_dag run launch --config demo/cfg.yaml
 # Or use the configuration exported above to collect in the background:
-data_collect_dag run --config ~/data_collect_config/cfg.yaml --pipeline fps_undist_nomotion --background
+data_collect_dag run launch --config ~/data_collect_config/cfg.yaml --pipeline fps_undist_nomotion --background
 tail -f ~/DATA_COLLECT/background.log
 ```
 
@@ -115,20 +115,22 @@ The CLI supports these forms, also available through `/usr/bin/python3 -m data_c
 ```text
 data_collect_dag init DIR [--car-id CAR_ID] [--force]
 data_collect_dag inspect --config CFG [--pipeline NAME]
-data_collect_dag run --config CFG [--pipeline NAME] [--background]
-data_collect_dag start PIPELINE [--control-topic TOPIC] [--timeout SEC]
-data_collect_dag {pause,resume,stop,shutdown} [--control-topic TOPIC] [--timeout SEC]
+data_collect_dag run launch --config CFG [--pipeline NAME] [--background]
+data_collect_dag run start NAME [--control-topic TOPIC] [--timeout SEC]
+data_collect_dag run {pause,resume,stop} [--control-topic TOPIC] [--timeout SEC]
 data_collect_dag status [--status-topic TOPIC] [--timeout SEC]
+data_collect_dag shutdown [--control-topic TOPIC] [--timeout SEC]
 data_collect_dag clean --config CONFIG --keep-days N
 ```
 
-Each command owns its arguments. `run` creates a process and defaults to pipeline `init`; `start NAME` only controls an existing process and never launches one. `init` exports the installed version's templates; it does not upgrade the program, download weights or start collection. Root options are `--help` and `--version`; each subcommand has its own `--help`. `--config` belongs to `run`, `inspect` and `clean`; `--pipeline` belongs to `run` and `inspect`; `--background` belongs to `run`; `--car-id` and `--force` belong to `init`.
+Each command owns its arguments, placed after the leaf command. `run launch` creates a process and defaults to pipeline `init`; `run start NAME` controls an existing process and fails if none is available. Bare `run` displays the command group's help and returns 0. `init` exports the installed version's templates; it does not upgrade the program, download weights or start collection. Root options are `--help` and `--version`; each subcommand has its own `--help`. `--config` belongs to `run launch`, `inspect` and `clean`; `--pipeline` belongs to `run launch` and `inspect`; `--background` belongs to `run launch`; `--car-id` and `--force` belong to `init`.
 
 ```bash
 data_collect_dag --version
 data_collect_dag init --help
 data_collect_dag inspect --help
 data_collect_dag run --help
+data_collect_dag run launch --help
 ```
 
 Installation and upgrades do not update configurations already exported. After upgrading, use `init DIR --force` to replace template files; preserve any custom configuration edits first. Initialization prints the actual configuration path, calibration selection and pipeline names.
@@ -140,20 +142,20 @@ Background startup passes the lock descriptor to the detached child, prints its 
 Control a running instance from another terminal:
 
 ```bash
-data_collect_dag start fps
-data_collect_dag pause
-data_collect_dag resume
-data_collect_dag stop
+data_collect_dag run start fps
+data_collect_dag run pause
+data_collect_dag run resume
+data_collect_dag run stop
 data_collect_dag status
 data_collect_dag shutdown
 ```
 
-`start` checks the pipeline name before replacing the current session. An unknown name preserves the active session, including its paused state, and records `last_error`. `stop` ends the session and leaves the program available for another `start`. `shutdown` ends the session, writes its summary and exits. Foreground Ctrl+C and `kill -TERM PID` also request cleanup and exit.
+`run start` checks the pipeline name before replacing the current session. An unknown name preserves the active session, including its paused state, and records `last_error`. `run pause` pauses collection; `run resume` continues it. `run stop` ends the session and leaves the program available for another `run start`. `shutdown` ends the session, writes its summary and exits. Foreground Ctrl+C and `kill -TERM PID` also request cleanup and exit.
 
 The anonymous control client uses `/data_collect/control` and `/data_collect/status` by default. Write commands accept `--control-topic`; `status` accepts `--status-topic`. Match custom YAML topics with CLI overrides:
 
 ```bash
-data_collect_dag start fps --control-topic /vehicle/control --timeout 5
+data_collect_dag run start fps --control-topic /vehicle/control --timeout 5
 data_collect_dag status --status-topic /vehicle/status --timeout 5
 ```
 
@@ -173,9 +175,9 @@ The client loads no collection YAML, calibration, DAG or inference model. `--tim
 Collection pipelines have a 6,000-second active-duration limit. Completed or failed sessions leave the program available for control. Startup resolves message types for every configured `ros.topics` entry. Demo pipelines precheck configured topics for new messages within 500 ms on each session start. `fps_undist_nomotion` checks only the five cameras and five lidars; it needs no incoming localization, IMU, odometry or NMEA messages. It transforms each lidar into `base` using static calibration and merges the clouds without ego-motion compensation.
 
 ```bash
-data_collect_dag run --config demo/cfg.yaml --pipeline fps_undist_nomotion
+data_collect_dag run launch --config demo/cfg.yaml --pipeline fps_undist_nomotion
 # Or control an instance started with this pipeline in its configuration:
-data_collect_dag start fps_undist_nomotion
+data_collect_dag run start fps_undist_nomotion
 ```
 
 Pipeline definitions are loaded at program startup. Configuration edits require restarting the collection program; exported configurations must be updated or re-exported separately.
@@ -188,7 +190,7 @@ Relative `output.root_dir`, `calibration.path` and YOLO `model_path` values use 
 
 `output.disk_storage_limit_GB` limits ordinary file sizes under `output.root_dir`; `output.disk_storage_need_GB` sets the minimum free space required on each session start. Both use decimal GB (1,000,000,000 bytes), accept finite non-negative numbers, and are disabled by omission, `null` or `0`. The demo sets both to `100`.
 
-At startup, output size at or above the limit or free space below the requirement rejects the session. During collection, writes update cached sizes, logs are checked every second and directory scans reconcile external changes every 30 seconds. Reaching the limit stops new samples, finishes in-flight work and ends the session as `FAILED`. In-flight writes and final metadata can exceed the limit. Free space is checked at session admission. After freeing space, use `start` to retry.
+At startup, output size at or above the limit or free space below the requirement rejects the session. During collection, writes update cached sizes, logs are checked every second and directory scans reconcile external changes every 30 seconds. Reaching the limit stops new samples, finishes in-flight work and ends the session as `FAILED`. In-flight writes and final metadata can exceed the limit. Free space is checked at session admission. After freeing space, use `run start` to retry.
 
 Clean session directories while collection is stopped:
 

@@ -39,25 +39,25 @@ ros:
 
 收到 `start` 时先验证目标 pipeline 名称，存在才结束当前 session 并启动新 session。目标不存在时记录 `last_error`，保留活动 session 的运行或暂停状态及 session id，计数不重置。目标存在但初始化失败时，原 session 已结束，工具进入 `IDLE` 并报告错误。
 
-CLI 可直接复用这些 topic，无需配置文件；默认 `/data_collect/control` 和 `/data_collect/status`。`start`、`pause`、`resume`、`stop`、`shutdown` 接受 `--control-topic TOPIC`；`status` 接受 `--status-topic TOPIC`：
+CLI 可直接复用这些 topic，无需配置文件；默认 `/data_collect/control` 和 `/data_collect/status`。`run start`、`run pause`、`run resume`、`run stop` 及根级 `shutdown` 接受 `--control-topic TOPIC`；根级 `status` 接受 `--status-topic TOPIC`。四个 pipeline 控制命令只发送叶子动作 `start/pause/resume/stop`，JSON 协议保持不变：
 
 ```bash
-data_collect_dag start fps
-data_collect_dag pause
-data_collect_dag resume
-data_collect_dag stop
+data_collect_dag run start fps
+data_collect_dag run pause
+data_collect_dag run resume
+data_collect_dag run stop
 data_collect_dag status
 data_collect_dag shutdown
 ```
 
-`run --config CFG [--pipeline NAME] [--background]` 创建采集系统进程；`start NAME` 仅向已有实例发送指令。不存在运行实例时，控制客户端等待超时并返回失败，不会创建采集进程。自定义 topic 示例：
+`run launch --config CFG [--pipeline NAME] [--background]` 创建采集系统进程，默认 pipeline 为 `init`；`run start NAME` 仅向已有实例发送指令。单独执行 `run` 显示命令组帮助并返回 0。参数放在叶子命令之后。不存在运行实例时，控制客户端等待超时并返回失败，不会创建采集进程。自定义 topic 示例：
 
 ```bash
-data_collect_dag start fps --control-topic /vehicle/control --timeout 5
+data_collect_dag run start fps --control-topic /vehicle/control --timeout 5
 data_collect_dag status --status-topic /vehicle/status --timeout 5
 ```
 
-客户端使用独立匿名 ROS 节点，不加载采集配置、标定、DAG 或推理模型。发送命令前检查 Master 并等待控制订阅者；`status` 等待状态消息及活动发布连接。`--timeout SEC` 为有限正数，默认 5 秒，分别用于 Master 检查和 topic 连接/消息等待。超时、无目标接口或检测到发送失败时返回非零。
+客户端使用独立匿名 ROS 节点，不加载采集配置、标定、DAG 或推理模型。发送命令前检查 Master 并等待控制订阅者；`status` 等待状态消息及活动发布连接。`--timeout SEC` 为有限正数，默认 5 秒，分别用于 Master 检查和 topic 连接/消息等待。成功返回 0，超时、无目标接口或检测到发送失败返回 1，参数错误返回 2。
 
 控制命令成功退出表示消息已发布；应用通过控制队列异步执行。`status` 读取一条现有状态 JSON，展示状态、pipeline、session、保存/跳过/失败计数、磁盘空闲空间及最近错误。例如下方 JSON 对应：
 

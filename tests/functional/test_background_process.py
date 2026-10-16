@@ -105,7 +105,7 @@ def _launch(tmp_path):
         "DCD_TEST_READY": str(ready), "DCD_TEST_CONTROL": str(control), "DCD_TEST_ENV": "inherited",
     })
     launcher = subprocess.run(
-        [sys.executable, "-m", "data_collect_dag", "run", "--config", "config.yaml", "--background"],
+        [sys.executable, "-m", "data_collect_dag", "run", "launch", "--config", "config.yaml", "--background"],
         cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=5,
     )
     assert launcher.returncode == 0, launcher.stderr

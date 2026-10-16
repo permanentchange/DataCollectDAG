@@ -90,7 +90,7 @@ def test_real_ros_cli_lifecycle_locking_and_timeouts(tmp_path, ros_env, backgrou
         "cache": {"defaults_by_role": {"image": {"max_frames": 2, "max_age_sec": 1}}},
         "pipelines": {"init": pipeline, "fps": pipeline},
     }))
-    args = ["run", "--config", str(config)] + (["--background"] if background else [])
+    args = ["run", "launch", "--config", str(config)] + (["--background"] if background else [])
     with (tmp_path / "collector.log").open("w") as log:
         process = subprocess.Popen([sys.executable, "-m", "data_collect_dag", *args], env=ros_env,
                                    stdout=log, stderr=log, start_new_session=True)
@@ -103,24 +103,27 @@ def test_real_ros_cli_lifecycle_locking_and_timeouts(tmp_path, ros_env, backgrou
             # Check that the guarded full YAML name is the actual ROS node.
             with ServerProxy(ros_env["ROS_MASTER_URI"]) as proxy:
                 assert proxy.lookupNode("/integration_test", name)[0] == 1
-            assert cli(ros_env, "start", "fps").returncode == 0
+            assert cli(ros_env, "run", "start", "fps").returncode == 0
             active = wait_status(ros_env, "RUNNING", "fps")
             session_id = re.search(r"Session:\s+(\S+)", active).group(1)
-            assert cli(ros_env, "pause").returncode == 0
+            assert cli(ros_env, "run", "pause").returncode == 0
             wait_status(ros_env, "PAUSED", "fps")
-            assert cli(ros_env, "resume").returncode == 0
+            assert cli(ros_env, "run", "resume").returncode == 0
             wait_status(ros_env, "RUNNING", "fps")
             # Sending a valid control message is distinct from successful execution.
-            assert cli(ros_env, "start", "missing").returncode == 0
+            assert cli(ros_env, "run", "start", "missing").returncode == 0
             active = wait_status(ros_env, "RUNNING", "fps", "unknown pipeline: missing")
             assert session_id in active
-            assert cli(ros_env, "stop").returncode == 0
+            assert cli(ros_env, "run", "stop").returncode == 0
             wait_status(ros_env, "IDLE")
             for duplicate_background in (False, True):
-                duplicate = cli(ros_env, "run", "--config", str(config), *(["--background"] if duplicate_background else []))
+                duplicate = cli(ros_env, "run", "launch", "--config", str(config), *(["--background"] if duplicate_background else []))
                 assert duplicate.returncode == 1 and "is already running" in duplicate.stderr
-            missing = cli(ros_env, "pause", "--control-topic", "/absent/control", "--timeout", "0.2")
+            missing = cli(ros_env, "run", "pause", "--control-topic", "/absent/control", "--timeout", "0.2")
             assert missing.returncode == 1 and "no collection control subscriber" in missing.stderr
+            assert cli(ros_env, "run", "start", "fps").returncode == 0
+            restarted = wait_status(ros_env, "RUNNING", "fps")
+            assert session_id not in restarted
             assert cli(ros_env, "shutdown").returncode == 0
             wait_status_gone = cli(ros_env, "status", "--timeout", "1")
             # Allow a last latched snapshot during shutdown; the next query must fail.
@@ -128,6 +131,8 @@ def test_real_ros_cli_lifecycle_locking_and_timeouts(tmp_path, ros_env, backgrou
                 time.sleep(0.3)
                 wait_status_gone = cli(ros_env, "status", "--timeout", "1")
             assert wait_status_gone.returncode == 1
+            missing = cli(ros_env, "run", "start", "fps", "--timeout", "0.2")
+            assert missing.returncode == 1 and "no collection control subscriber" in missing.stderr
             if not background:
                 assert process.wait(timeout=5) == 0
             from data_collect_dag.instance_guard import InstanceGuard

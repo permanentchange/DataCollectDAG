@@ -49,9 +49,13 @@ def fake_ros(monkeypatch):
 
 
 @pytest.mark.parametrize("command", ["start", "pause", "resume", "stop", "shutdown"])
-def test_sends_existing_json_protocol_and_uses_anonymous_node(fake_ros, command, capsys):
+def test_sends_existing_json_protocol_and_uses_anonymous_node(fake_ros, command, monkeypatch, capsys):
     endpoint, calls, _snapshot = fake_ros
-    client.run_control_command(command, "fps" if command == "start" else None)
+    arguments = [command] if command == "shutdown" else ["run", command]
+    if command == "start":
+        arguments.append("fps")
+    monkeypatch.setattr("sys.argv", ["data_collect_dag"] + arguments)
+    assert main() == 0
     assert endpoint.messages == [{"command": command, **({"pipeline": "fps"} if command == "start" else {})}]
     assert calls[0][2]["anonymous"] is True
     assert calls[0][1][0] != "data_collect_dag"
@@ -60,10 +64,14 @@ def test_sends_existing_json_protocol_and_uses_anonymous_node(fake_ros, command,
     assert "execution is asynchronous" in capsys.readouterr().out
 
 
-def test_status_prints_existing_snapshot_without_publishing_control(fake_ros, capsys):
+def test_status_prints_existing_snapshot_without_publishing_control(fake_ros, monkeypatch, capsys):
     endpoint, calls, _snapshot = fake_ros
-    client.run_control_command("status", status_topic="/custom/status")
+    timeouts = []
+    monkeypatch.setattr(client, "wait_for_master", timeouts.append)
+    monkeypatch.setattr("sys.argv", ["data_collect_dag", "status", "--status-topic", "/custom/status", "--timeout", "0.2"])
+    assert main() == 0
     assert calls[1] == ("subscribe", "/custom/status")
+    assert timeouts == [0.2]
     assert not endpoint.messages and endpoint.closed
     assert capsys.readouterr().out == (
         "State:       RUNNING\nPipeline:    fps\nSession:     session-1\nSaved:       125\n"
@@ -85,7 +93,7 @@ def test_publish_error_is_reported_by_cli(fake_ros, monkeypatch, capsys):
     def fail(message):
         raise OSError("publish failed")
     endpoint.publish = fail
-    monkeypatch.setattr("sys.argv", ["data_collect_dag", "pause"])
+    monkeypatch.setattr("sys.argv", ["data_collect_dag", "run", "pause"])
     assert main() == 1
     assert "publish failed" in capsys.readouterr().err
     assert endpoint.closed
@@ -136,16 +144,35 @@ def test_master_probe_has_bounded_timeout(monkeypatch):
     assert probes and 0 < probes[0][1] <= 0.01
 
 
-def test_cli_control_overrides_without_config(fake_ros, monkeypatch):
-    _endpoint, calls, _snapshot = fake_ros
-    monkeypatch.setattr("sys.argv", ["data_collect_dag", "start", "fps", "--control-topic", "/custom/control", "--timeout", "0.2"])
+@pytest.mark.parametrize("arguments", [
+    ["run", "start", "fps"], ["run", "pause"], ["run", "resume"], ["run", "stop"], ["shutdown"],
+])
+def test_cli_control_overrides_without_config(fake_ros, monkeypatch, arguments):
+    endpoint, calls, _snapshot = fake_ros
+    timeouts = []
+    monkeypatch.setattr(client, "wait_for_master", timeouts.append)
+    monkeypatch.setattr("sys.argv", ["data_collect_dag"] + arguments + ["--control-topic", "/custom/control", "--timeout", "0.2"])
     assert main() == 0
     assert calls[1][1] == "/custom/control"
+    assert endpoint.messages[0]["command"] == (arguments[1] if arguments[0] == "run" else arguments[0])
+    assert timeouts == [0.2]
 
 
 @pytest.mark.parametrize("arguments", [
-    ["start"], ["pause", "fps"], ["status", "--config", "cfg.yaml"], ["stop", "--background"],
-    ["resume", "--pipeline", "fps"], ["--config", "cfg.yaml", "--timeout", "1"],
+    ["run", "start", "fps"], ["run", "pause"], ["run", "resume"], ["run", "stop"], ["shutdown"], ["status"],
+])
+def test_cli_missing_instance_fails(fake_ros, monkeypatch, capsys, arguments):
+    endpoint, _calls, _snapshot = fake_ros
+    endpoint.connections = 0
+    monkeypatch.setattr("sys.argv", ["data_collect_dag"] + arguments + ["--timeout", "0.001"])
+    assert main() == 1
+    assert "within 0.001 seconds" in capsys.readouterr().err
+    assert not endpoint.messages and endpoint.closed
+
+
+@pytest.mark.parametrize("arguments", [
+    ["run", "start"], ["run", "pause", "fps"], ["status", "--config", "cfg.yaml"], ["run", "stop", "--background"],
+    ["run", "resume", "--pipeline", "fps"], ["--config", "cfg.yaml", "--timeout", "1"],
     ["status", "--timeout", "0"], ["status", "--timeout", "nan"], ["status", "--timeout", "inf"],
 ])
 def test_control_argument_validation(arguments, monkeypatch):

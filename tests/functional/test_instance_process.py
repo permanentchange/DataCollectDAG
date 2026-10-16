@@ -51,7 +51,7 @@ def instance_env(tmp_path):
 
 
 def launch(config, env, background=False):
-    command = [sys.executable, "-m", "data_collect_dag", "run", "--config", str(config)]
+    command = [sys.executable, "-m", "data_collect_dag", "run", "launch", "--config", str(config)]
     if background:
         command.append("--background")
     return subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -185,7 +185,7 @@ class Block(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, Block())
 from data_collect_dag import cli, ros_control_client
 ros_control_client.run_control_command = lambda *args, **kwargs: None
-sys.argv = ["data_collect_dag", "start", "fps"]
+sys.argv = ["data_collect_dag", "run", "start", "fps"]
 assert cli.main() == 0
 '''
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))

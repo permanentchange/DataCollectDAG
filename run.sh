@@ -24,7 +24,7 @@ fi
 
 # pipeline_name 可选
 if [ -n "$pipeline_name" ]; then
-    $PYTHON_BIN -m data_collect_dag run --config "$config_path" --pipeline "$pipeline_name"
+    $PYTHON_BIN -m data_collect_dag run launch --config "$config_path" --pipeline "$pipeline_name"
 else
-    $PYTHON_BIN -m data_collect_dag run --config "$config_path"
+    $PYTHON_BIN -m data_collect_dag run launch --config "$config_path"
 fi

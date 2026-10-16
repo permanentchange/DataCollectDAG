@@ -19,7 +19,7 @@ def start_background(config_path: Path, pipeline_name: str, guard: InstanceGuard
     log_path = root / BACKGROUND_LOG_FILENAME
     with log_path.open("ab") as log_file:
         process = subprocess.Popen(
-            [sys.executable, "-u", "-m", "data_collect_dag", "run", "--config", str(config_path.resolve()),
+            [sys.executable, "-u", "-m", "data_collect_dag", "run", "launch", "--config", str(config_path.resolve()),
              "--pipeline", pipeline_name, "--instance-lock-fd", str(guard.fd)],
             stdin=subprocess.DEVNULL,
             stdout=log_file,
@@ -32,7 +32,7 @@ def start_background(config_path: Path, pipeline_name: str, guard: InstanceGuard
     return 0
 
 
-def _run(args: argparse.Namespace) -> int:
+def _launch(args: argparse.Namespace) -> int:
     with InstanceGuard(load_node_name(args.config), args.instance_lock_fd) as guard:
         if args.background:
             return start_background(args.config, args.pipeline, guard)
@@ -80,11 +80,12 @@ def _clean(args: argparse.Namespace) -> int:
 def _control(args: argparse.Namespace) -> int:
     from data_collect_dag.ros_control_client import run_control_command
 
-    if args.command == "status":
+    action = args.run_command if args.command == "run" else args.command
+    if action == "status":
         run_control_command("status", status_topic=args.status_topic, timeout=args.timeout)
     else:
         run_control_command(
-            args.command, getattr(args, "target_pipeline", None),
+            action, getattr(args, "target_pipeline", None),
             control_topic=args.control_topic, timeout=args.timeout,
         )
     return 0
@@ -98,12 +99,13 @@ def main() -> int:
     except InstanceAlreadyRunningError as exc:
         print(f"Error: {exc}", file=sys.stderr)
     except Exception as exc:
+        command = args.run_command if args.command == "run" else args.command
         action = {
-            "run": "background launch" if getattr(args, "background", False) else "collection startup",
+            "launch": "background launch" if getattr(args, "background", False) else "collection startup",
             "init": "configuration export",
             "inspect": "configuration inspection",
             "clean": "cleanup",
-        }.get(args.command, args.command)
+        }.get(command, command)
         print(f"{action} failed: {exc}", file=sys.stderr)
     return 1
 
@@ -126,13 +128,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inspect.set_defaults(handler=_inspect)
 
-    run = commands.add_parser("run", help="create a collection system process")
-    run.add_argument("--config", type=Path, required=True, metavar="CFG")
-    run.add_argument("--pipeline", default="init", metavar="NAME", help="pipeline to run (default: init)")
-    launch = run.add_mutually_exclusive_group()
-    launch.add_argument("--background", action="store_true", help="detach and print PID and log path")
-    launch.add_argument("--instance-lock-fd", type=int, help=argparse.SUPPRESS)
-    run.set_defaults(handler=_run)
+    run = commands.add_parser("run", help="launch a collection process or control its pipeline")
+    run.set_defaults(handler=lambda _args: _print_help(run))
+    run_commands = run.add_subparsers(dest="run_command")
+    launch = run_commands.add_parser("launch", help="create a collection system process and start a pipeline")
+    launch.add_argument("--config", type=Path, required=True, metavar="CFG")
+    launch.add_argument("--pipeline", default="init", metavar="NAME", help="pipeline to run (default: init)")
+    background = launch.add_mutually_exclusive_group()
+    background.add_argument("--background", action="store_true", help="detach and print PID and log path")
+    background.add_argument("--instance-lock-fd", type=int, help=argparse.SUPPRESS)
+    launch.set_defaults(handler=_launch)
 
     clean = commands.add_parser("clean", help="clean historical sessions; stop collection before cleanup")
     clean.add_argument("--config", type=Path, required=True, metavar="CFG")
@@ -141,7 +146,8 @@ def build_parser() -> argparse.ArgumentParser:
     clean.set_defaults(handler=_clean)
 
     for name in ("start", "pause", "resume", "stop", "shutdown", "status"):
-        command = commands.add_parser(
+        parent = commands if name in ("shutdown", "status") else run_commands
+        command = parent.add_parser(
             name, help="query a running instance" if name == "status" else f"send {name} to a running instance",
         )
         if name == "start":
@@ -156,6 +162,11 @@ def build_parser() -> argparse.ArgumentParser:
         )
         command.set_defaults(handler=_control)
     return parser
+
+
+def _print_help(parser: argparse.ArgumentParser) -> int:
+    parser.print_help()
+    return 0
 
 
 def _nonnegative_days(value: str) -> int:

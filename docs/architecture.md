@@ -5,7 +5,7 @@
 ## 1. 运行路径
 
 ```text
-启动 CLI run --config
+启动 CLI run launch --config
     -> InstanceGuard: 获取完整 ROS 节点名对应的本机锁
     -> AppRuntime: 加载配置、标定并绑定控制队列
     -> RosAdapter: 初始化 ROS，订阅 topic，发布状态
@@ -13,7 +13,7 @@
     -> SessionRuntime: 容量检查、创建会话目录、topic 预检查、节点初始化
     -> 主帧队列 -> DagExecutor -> 处理节点 -> 会话文件
 
-控制 CLI start/pause/resume/stop/shutdown
+控制 CLI run start/pause/resume/stop 或根级 shutdown
     -> 匿名 CLI 节点 -> control_topic -> 采集程序的控制队列
 查询 CLI status
     -> 匿名 CLI 节点 <- status_topic <- StatusSnapshot
@@ -23,11 +23,15 @@
 
 ### 实例与进程
 
-`run` 创建采集系统进程，要求 `--config`；`start NAME` 仅控制已有进程中的 pipeline。CLI 先读取 `ros.node_name`：相对名称使用 `ROS_NAMESPACE`，绝对名称指定完整命名空间；未设置 `ROS_NAMESPACE` 时默认完整名称为 `/data_collect_dag`。初始化 ROS、加载标定和构造运行时之前，以完整名的 SHA256 获取非阻塞独占 `fcntl.flock`，锁路径为 `/tmp/data_collect_dag-<SHA256>.lock`。配置路径、输出路径及用户目录不影响锁的身份。
+`cli.py::build_parser` 使用嵌套 argparse 子解析器，分别保存根命令 `command` 和 `run` 组动作 `run_command`，每个叶子命令绑定处理函数；`app.py::build_parser` 继续导出同一解析器。
+
+`run launch` 创建采集系统进程，要求 `--config`，省略 `--pipeline` 时使用 `init`；`run start NAME` 仅控制已有进程中的 pipeline，无目标实例时返回失败。单独执行 `run` 显示该命令组帮助，返回 0。`run pause`、`run resume` 和 `run stop` 控制当前 pipeline，`status` 和 `shutdown` 保留在根级。参数须放在叶子命令之后；`--config`、`--pipeline`、`--background` 属于 `run launch`。
+
+启动时 CLI 先读取 `ros.node_name`：相对名称使用 `ROS_NAMESPACE`，绝对名称指定完整命名空间；未设置 `ROS_NAMESPACE` 时默认完整名称为 `/data_collect_dag`。初始化 ROS、加载标定和构造运行时之前，以完整名的 SHA256 获取非阻塞独占 `fcntl.flock`，锁路径为 `/tmp/data_collect_dag-<SHA256>.lock`。配置路径、输出路径及用户目录不影响锁的身份。
 
 锁在 `IDLE`、`RUNNING` 和 `PAUSED` 时都被持有。重复启动返回非零并报告 `ROS node <完整名称> is already running.`。不同完整节点名可以并存；分别控制时须配置不同的 control/status topic。本机锁在进程退出后释放；保留锁文件以维持后续启动使用同一 inode。互斥范围为本机。
 
-`--background` 由父进程先获取锁，再用当前 Python 和 `Popen(pass_fds=...)` 创建独立进程。子进程继承锁，父进程仅关闭自己的描述符。PID 表示子进程已经创建；后续配置、标定和 ROS 初始化的结果通过日志诊断。子进程继承环境及工作目录，stdout/stderr 追加到 `<output.root_dir>/background.log`。
+`run launch --background` 由父进程先获取锁，再用当前 Python 和 `Popen(pass_fds=...)` 执行 `python -m data_collect_dag run launch ... --instance-lock-fd FD` 创建独立进程。隐藏参数 `--instance-lock-fd` 属于 `launch`，与 `--background` 互斥。子进程继承锁，父进程仅关闭自己的描述符。PID 表示子进程已经创建；后续配置、标定和 ROS 初始化的结果通过日志诊断。子进程继承环境及工作目录，stdout/stderr 追加到 `<output.root_dir>/background.log`。
 
 ### 控制与会话
 
@@ -87,7 +91,7 @@
 
 `clean --config CONFIG --keep-days N` 仅加载输出配置并清理后退出，不启动运行时；不提供配置会明确报错，不自动选择清理目录。只删除 root_dir 的直接普通会话子目录，完整格式为 `YYYYMMDD_HHMMSS_八位小写十六进制后缀`，按目录名中的有效本地日期判断。N=0 删除全部会话目录；N>0 删除早于今天减去 N−1 天的目录，未来日期保留。其他目录、文件及符号链接保留；root_dir 不存在时成功退出，删除失败返回非零。清理命令不接受 `--pipeline`。清理应在采集停止时执行。
 
-最小配置示例：先准备标定文件、运行 ROS master，并发布相应 topic；通过 `run --config CONFIG --pipeline example` 启动。此 DAG 仅接收样本，不保存传感器文件。
+最小配置示例：先准备标定文件、运行 ROS master，并发布相应 topic；通过 `run launch --config CONFIG --pipeline example` 启动。此 DAG 仅接收样本，不保存传感器文件。
 
 ```yaml
 output:
