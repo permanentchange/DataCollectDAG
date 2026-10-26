@@ -1,184 +1,162 @@
 #!/usr/bin/env python3
-"""Merge Xtreme1 split part directories into one hardlinked dataset."""
+"""Merge Xtreme1 parts with hardlinks (Python 3.8+)."""
 
 import argparse
 import errno
 import os
+import tempfile
+import time
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
 
 
-MergeOp = Tuple[Path, Path]
-PartSummary = Tuple[str, Path, int]
-
-
-def parse_args() -> argparse.Namespace:
+def main():
     parser = argparse.ArgumentParser(
-        description="Merge Xtreme1 part directories into one dataset with hardlinks."
+        description="合并 Xtreme1 分片（仅硬链接，不复制文件）。",
+        epilog="示例: python3 merge.py part1 part2 -o merged [--dry-run]"
     )
-    parser.add_argument(
-        "paths",
-        nargs="+",
-        type=Path,
-        help="Input part directories followed by the merged output root",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the merge plan without creating directories or hardlinks",
-    )
+    parser.add_argument("parts", nargs="+", type=Path, help="输入分片目录")
+    parser.add_argument("-o", "--output", required=True, type=Path, help="输出目录")
+    parser.add_argument("--dry-run", action="store_true", help="快速预检，不扫描文件或写入")
+    parser.add_argument("--log-interval", type=float, default=5, metavar="SEC",
+                        help="进度日志间隔，默认 5 秒")
     args = parser.parse_args()
-    if len(args.paths) < 2:
-        parser.error("expected at least one input part directory and one output directory")
-    args.part_dirs = args.paths[:-1]
-    args.output_dir = args.paths[-1]
-    return args
 
+    def fail(msg):
+        parser.error(str(msg))
 
-def fail(message: str) -> None:
-    raise SystemExit("error: {}".format(message))
+    def log(msg):
+        print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
+    def progress(stage, total=0):
+        start = last = time.monotonic()
 
-def resolve_output_path(output_dir: Path, create_parent: bool) -> Path:
-    output_parent = output_dir.parent if output_dir.parent != Path("") else Path(".")
-    if create_parent:
-        output_parent.mkdir(parents=True, exist_ok=True)
-    return output_dir.resolve(strict=False)
+        def update(count, location="", force=False):
+            nonlocal last
+            if not force and count % 64:
+                return
+            now = time.monotonic()
+            if not force and now - last < args.log_interval:
+                return
+            last = now
+            elapsed = max(now - start, 1e-6)
+            rate = count / elapsed
+            msg = f"[{stage}] {count:,}"
+            if total:
+                msg += f"/{total:,} ({count / total:.1%})"
+            msg += f" files | {rate:,.0f}/s | {elapsed:.1f}s"
+            if total and 0 < count < total:
+                msg += f" | ETA {(total - count) / rate:.0f}s"
+            log(msg + (f" | {location}" if location else ""))
 
+        return update
 
-def ensure_output_not_inside_inputs(part_dirs: Sequence[Path], output_dir: Path) -> None:
-    for part_dir in part_dirs:
-        if output_dir == part_dir:
-            fail("output directory must not be an input directory: {}".format(output_dir))
+    # 检查目录
+    if args.log_interval <= 0:
+        fail("--log-interval must be > 0")
+    if any(not p.is_dir() for p in args.parts):
+        fail("输入目录不存在或不是目录")
 
-        try:
-            output_dir.relative_to(part_dir)
-        except ValueError:
-            continue
+    parts = [p.resolve() for p in args.parts]
+    output = args.output.resolve()
+    if len(set(parts)) != len(parts):
+        fail("输入目录重复")
+    if any(output == p or p in output.parents for p in parts):
+        fail("输出目录不能位于输入目录内")
+    if output.exists() and not output.is_dir():
+        fail("输出路径不是目录")
 
-        fail("output directory must not be inside an input directory: {}".format(output_dir))
+    def subdirs(p):
+        return sorted(x.name for x in p.iterdir() if x.is_dir())
 
+    names = subdirs(parts[0])
+    if not names or any(subdirs(p) != names for p in parts[1:]):
+        fail("输入分片的一级数据子目录不一致或为空")
+    if any((output / name).exists() for name in names):
+        fail("输出目录中已存在同名数据子目录")
 
-def resolve_part_dirs(part_dirs: Sequence[Path]) -> List[Path]:
-    resolved = []
-    seen = set()
-    for part_dir in part_dirs:
-        if not part_dir.is_dir():
-            fail("input part directory does not exist: {}".format(part_dir))
-        part_dir_abs = part_dir.resolve()
-        if part_dir_abs in seen:
-            fail("duplicate input part directory: {}".format(part_dir_abs))
-        seen.add(part_dir_abs)
-        resolved.append(part_dir_abs)
-    return resolved
+    # 文件系统检查
+    target = output
+    while not target.exists():
+        target = target.parent
+    device = target.stat().st_dev
+    for part in parts:
+        for name in names:
+            if (part / name).stat().st_dev != device:
+                fail(f"无法跨文件系统创建硬链接: {part / name}")
 
+    if args.dry_run:
+        log(f"[dry-run] 通过：{len(parts)} 个分片、{len(names)} 个数据子目录；未扫描文件或写入")
+        return
 
-def list_data_dir_names(part_dir: Path) -> List[str]:
-    return sorted(path.name for path in part_dir.iterdir() if path.is_dir())
+    # 预扫描：统计文件并检查同名冲突
+    counts, samples, scanned = [0] * len(parts), [], 0
+    report = progress("scan")
+    log(f"[scan] 开始检查 {len(parts)} 个分片、{len(names)} 个数据子目录")
 
+    for name in names:
+        seen = set()
+        for i, part in enumerate(parts):
+            sample = None
+            with os.scandir(str(part / name)) as entries:
+                for entry in entries:
+                    if not entry.is_file():
+                        continue
+                    if entry.name in seen:
+                        fail(f"同名文件冲突: {name}/{entry.name}")
+                    seen.add(entry.name)
+                    sample = sample or entry.path
+                    counts[i] += 1
+                    scanned += 1
+                    report(scanned, f"{part.name}/{name}")
+            if sample:
+                samples.append(sample)
 
-def ensure_consistent_data_dirs(part_dirs: Sequence[Path]) -> List[str]:
-    expected = list_data_dir_names(part_dirs[0])
-    if not expected:
-        fail("part directory has no data subdirectories: {}".format(part_dirs[0]))
+    report(scanned, "完成", force=True)
 
-    for part_dir in part_dirs[1:]:
-        actual = list_data_dir_names(part_dir)
-        if actual != expected:
-            fail(
-                "inconsistent data subdirectories in {}: expected {}, got {}".format(
-                    part_dir, expected, actual
-                )
-            )
+    # 使用真实文件测试硬链接，不允许降级为复制
+    output.parent.mkdir(parents=True, exist_ok=True)
+    probe_dir = output if output.exists() else output.parent
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=".hardlink_check_", dir=str(probe_dir)
+        ) as tmp:
+            for i, src in enumerate(samples):
+                os.link(src, os.path.join(tmp, str(i)))
+    except OSError as e:
+        fail(f"硬链接预检失败: {e}")
 
-    return expected
+    log(f"[check] 硬链接预检通过（{len(samples)} 个样本）")
 
+    # 创建输出目录
+    output.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (output / name).mkdir()
 
-def ensure_output_data_dirs_absent(output_dir: Path, data_dir_names: Sequence[str]) -> None:
-    for data_dir_name in data_dir_names:
-        data_dir = output_dir / data_dir_name
-        if data_dir.exists():
-            fail("output data directory already exists: {}".format(data_dir))
+    # 执行硬链接并输出进度
+    total, linked = sum(counts), 0
+    report = progress("link", total)
+    log(f"[link] 开始合并 {total:,} 个文件 -> {output}")
 
+    for i, part in enumerate(parts):
+        for name in names:
+            dst_dir = str(output / name)
+            with os.scandir(str(part / name)) as entries:
+                for entry in entries:
+                    if not entry.is_file():
+                        continue
+                    try:
+                        os.link(entry.path, os.path.join(dst_dir, entry.name))
+                    except OSError as e:
+                        if e.errno == errno.EXDEV:
+                            fail(f"无法跨文件系统创建硬链接: {entry.path}")
+                        fail(f"创建硬链接失败: {entry.path}: {e}")
+                    linked += 1
+                    report(linked, f"{part.name}/{name}")
 
-def build_merge_plan(
-    part_dirs: Sequence[Path], output_dir: Path, data_dir_names: Sequence[str]
-) -> Tuple[List[MergeOp], List[PartSummary]]:
-    operations = []
-    summaries = []
-    seen_destinations: Dict[Path, Path] = {}
+        log(f"[link] 分片完成: {part.name} ({counts[i]:,} files)")
 
-    for part_dir in part_dirs:
-        part_file_count = 0
-        for data_dir_name in data_dir_names:
-            src_data_dir = part_dir / data_dir_name
-            dst_data_dir = output_dir / data_dir_name
-            for src in sorted(path for path in src_data_dir.iterdir() if path.is_file()):
-                dst = dst_data_dir / src.name
-                previous = seen_destinations.get(dst)
-                if previous is not None:
-                    fail(
-                        "duplicate destination file {} from {} and {}".format(
-                            dst, previous, src
-                        )
-                    )
-                seen_destinations[dst] = src
-                operations.append((src, dst))
-                part_file_count += 1
-
-        summaries.append((part_dir.name, part_dir, part_file_count))
-
-    return operations, summaries
-
-
-def create_output_dirs(output_dir: Path, data_dir_names: Sequence[str]) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for data_dir_name in data_dir_names:
-        (output_dir / data_dir_name).mkdir()
-
-
-def link_operations(operations: Sequence[MergeOp]) -> None:
-    for src, dst in operations:
-        try:
-            os.link(str(src), str(dst))
-        except OSError as exc:
-            if exc.errno == errno.EXDEV:
-                fail("cannot hardlink across filesystems: {} -> {}".format(src, dst))
-            fail("failed to hardlink {} -> {}: {}".format(src, dst, exc))
-
-
-def print_summary(
-    summaries: Sequence[PartSummary], output_dir: Path, total_files: int, dry_run: bool
-) -> None:
-    if dry_run:
-        print("dry run: no files linked")
-
-    for part_name, part_dir, file_count in summaries:
-        print("{}: {} files -> {}".format(part_name, file_count, part_dir))
-
-    print(
-        "merge complete: {} files from {} parts -> {}".format(
-            total_files, len(summaries), output_dir
-        )
-    )
-
-
-def main() -> None:
-    args = parse_args()
-
-    part_dirs = resolve_part_dirs(args.part_dirs)
-    output_dir = resolve_output_path(args.output_dir, create_parent=not args.dry_run)
-    ensure_output_not_inside_inputs(part_dirs, output_dir)
-
-    data_dir_names = ensure_consistent_data_dirs(part_dirs)
-    ensure_output_data_dirs_absent(output_dir, data_dir_names)
-    operations, summaries = build_merge_plan(part_dirs, output_dir, data_dir_names)
-
-    if not args.dry_run:
-        create_output_dirs(output_dir, data_dir_names)
-        link_operations(operations)
-
-    print_summary(summaries, output_dir, len(operations), dry_run=args.dry_run)
+    report(linked, "完成", force=True)
+    log(f"合并完成: {linked:,} 个硬链接 -> {output}")
 
 
 if __name__ == "__main__":
