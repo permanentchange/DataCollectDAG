@@ -13,10 +13,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.8'
-      - name: Install base and test extras only
+      - name: Install development mode without inference
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e '.[test]'
+          python -m pip install -e '.[dev]'
           python -m pip check
       - name: Confirm inference packages were not installed
         run: |

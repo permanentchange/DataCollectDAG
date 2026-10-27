@@ -34,26 +34,43 @@ Installation from Git requires Git:
 /usr/bin/python3 -m pip show data-collect-dag
 ```
 
-### Optional inference and tools
+### Installation modes
 
-| Extra | Purpose |
+The installer and pip extras support the same five modes:
+
+| Mode | Purpose |
 | --- | --- |
-| `yolo` | Ultralytics inference, including its PyTorch requirements |
-| `yolo-export` | Ultralytics model export dependencies |
-| `onnx-cpu` | ONNX and CPU ONNX Runtime |
-| `onnx-gpu` | ONNX and GPU ONNX Runtime |
-| `tools` | Open3D and tqdm for standalone tools |
-| `test` | pytest |
+| `base` | Base runtime, without inference packages; also the default |
+| `yolo` | Base runtime and Ultralytics, including its PyTorch requirements |
+| `yolo-arm` | YOLO with explicitly supplied local Jetson PyTorch wheels |
+| `dev` | Base runtime and pytest |
+| `yolo-dev` | YOLO and pytest |
 
 ```bash
 /usr/bin/python3 -m pip install -e '.[yolo]'
+# Development without inference dependencies:
+/usr/bin/python3 -m pip install -e '.[dev]'
+# Remote YOLO installation:
+/usr/bin/python3 -m pip install --upgrade \
+  'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git@main'
 ```
 
-Choose one ONNX Runtime extra for the target device. ONNX models run through Ultralytics in the `yolo_gate` node.
+Plain `pip install .` and `pip install '.[base]'` install the same base runtime. `dev` adds only pytest; install standalone tool dependencies such as Open3D separately. Model export and ONNX dependencies are also installed separately when needed. ONNX models run through Ultralytics in the `yolo_gate` node.
 
-`bash setup.bash [base|yolo|cpu|gpu|arm|onnx-cpu|onnx-gpu]` installs from the checkout using `python` on `PATH`, which must be Python 3.8. `base` is the default; `yolo`, `cpu` and `gpu` install the YOLO extra. The node's `device` setting selects the inference device.
+`bash setup.bash [base|yolo|yolo-arm|dev|yolo-dev]` installs from the checkout using `python` on `PATH`, which must be Python 3.8. Omitting the mode selects `base`. The node's `device` setting selects the inference device. These are the only supported modes; there is no `yolo-arm-dev` mode.
 
-For Jetson YOLO installations, `bash setup.bash arm` reinstalls device-compatible `torch` and `torchvision` wheels from `~/wheels`, then installs the YOLO extra with those versions constrained. Both wheels must exist before uninstalling packages. The script selects its preferred filenames or a single wheel per package. Set `DCD_WHEEL_DIR`, `DCD_TORCH_WHEEL` and `DCD_TORCHVISION_WHEEL` to choose specific compatible builds. Match Python, JetPack and CUDA to the device.
+For Jetson YOLO installations, run `bash setup.bash yolo-arm`. It checks both local wheels before uninstalling packages, reinstalls `torch` and `torchvision` directly from `~/wheels` with `--no-deps`, then installs the YOLO extra with those exact wheel files as constraints. It never downloads remote torch or torchvision wheels, including same-version alternatives. Conflicting requirements fail rather than selecting another build; other dependencies can be downloaded normally. The script selects its preferred filenames or a single wheel per package. Set `DCD_WHEEL_DIR`, `DCD_TORCH_WHEEL` and `DCD_TORCHVISION_WHEEL` to choose specific compatible builds. Match Python, JetPack and CUDA to the device.
+
+For remote pip installation without a checkout, explicitly supply both local wheels in the same command. This example assumes exactly one compatible wheel per package in `~/wheels`:
+
+```bash
+/usr/bin/python3 -m pip install --upgrade \
+  "$HOME"/wheels/torch-*.whl \
+  "$HOME"/wheels/torchvision-*.whl \
+  'data-collect-dag[yolo-arm] @ git+https://github.com/permanentchange/DataCollectDAG.git@main'
+```
+
+Replace the globs with exact paths when multiple builds are present. The wheel paths fix the torch and torchvision sources during dependency resolution. The `[yolo-arm]` extra alone does not scan `~/wheels`, and `--find-links` alone does not guarantee selection of local builds.
 
 ## Initialize configuration
 
@@ -219,7 +236,7 @@ Session results under `<output.root_dir>/<session_id>/` include `debug.log`, `se
 Run with system Python 3.8 from the repository root:
 
 ```bash
-/usr/bin/python3 -m pip install -e '.[test]'
+/usr/bin/python3 -m pip install -e '.[dev]'
 PYTHONPATH=src /usr/bin/python3 -m pytest tests/unit -q
 PYTHONPATH=src /usr/bin/python3 -m pytest tests/functional -q
 ```

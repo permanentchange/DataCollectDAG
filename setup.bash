@@ -5,7 +5,7 @@ set -euo pipefail
 # Run consistently even if invoked from outside the repository root.
 cd "$(dirname -- "${BASH_SOURCE[0]}")"
 
-# Usage: bash setup.bash [base|yolo|cpu|gpu|arm|onnx-cpu|onnx-gpu]
+# Usage: bash setup.bash [base|yolo|yolo-arm|dev|yolo-dev]
 # The default install never installs or changes inference packages.
 MODE="${1:-base}"
 WHEEL_DIR="${DCD_WHEEL_DIR:-$HOME/wheels}"
@@ -56,13 +56,11 @@ case "$MODE" in
         echo "Installing the base DataCollectDAG runtime (no inference packages)..."
         python -m pip install -e .
         ;;
-    yolo|cpu|gpu)
-        echo "Installing DataCollectDAG with optional Ultralytics inference..."
-        # Ultralytics has no separate CUDA/CPU pip distribution. PyTorch
-        # and the pipeline's device setting select the inference device.
-        python -m pip install -e ".[yolo]"
+    yolo|dev|yolo-dev)
+        echo "Installing DataCollectDAG in $MODE mode..."
+        python -m pip install -e ".[$MODE]"
         ;;
-    arm)
+    yolo-arm)
         echo "Installing ARM YOLO with Jetson PyTorch wheels from $WHEEL_DIR..."
         if [[ ! -d "$WHEEL_DIR" ]]; then
             echo "ARM wheel directory does not exist: $WHEEL_DIR" >&2
@@ -80,43 +78,28 @@ case "$MODE" in
 
         echo "Using torch wheel: $torch_wheel"
         echo "Using torchvision wheel: $torchvision_wheel"
-        python -m pip uninstall -y torch torchvision
-        # Never allow pip to replace these vendor wheels as side effects of
-        # installing one another.
-        python -m pip install --no-deps "$torch_wheel" "$torchvision_wheel"
-
-        # Install Ultralytics and its ordinary dependencies, while pinning
-        # the vendor wheels we just installed. If the resolver reports a
-        # conflict, fail rather than fetching generic x86/CPU PyTorch.
+        # Constrain the source files, not just versions: even an index wheel
+        # with the same version must never replace the selected Jetson build.
         constraint_file=$(mktemp)
         trap 'rm -f "$constraint_file"' EXIT
-        python - "$constraint_file" <<'PY'
-from importlib import metadata
+        python - "$constraint_file" "$torch_wheel" "$torchvision_wheel" <<'PY'
 from pathlib import Path
 import sys
 
-constraints = []
-for package in ("torch", "torchvision"):
-    try:
-        version = metadata.version(package)
-    except metadata.PackageNotFoundError:
-        raise SystemExit("Failed to verify installed ARM wheel: " + package)
-    constraints.append("{}=={}".format(package, version))
+constraints = [
+    "{} @ {}".format(package, Path(wheel).resolve().as_uri())
+    for package, wheel in zip(("torch", "torchvision"), sys.argv[2:])
+]
 Path(sys.argv[1]).write_text("\n".join(constraints) + "\n", encoding="utf-8")
 PY
+        python -m pip uninstall -y torch torchvision
+        # Install only the local wheels before resolving any YOLO dependencies.
+        python -m pip install --no-deps "$torch_wheel" "$torchvision_wheel"
         python -m pip install --constraint "$constraint_file" \
-            --find-links "$WHEEL_DIR" -e ".[yolo]"
-        ;;
-    onnx-cpu|onnx-gpu)
-        echo "Installing optional $MODE dependencies..."
-        if [[ -d "$WHEEL_DIR" ]]; then
-            python -m pip install --find-links "$WHEEL_DIR" -e ".[$MODE]"
-        else
-            python -m pip install -e ".[$MODE]"
-        fi
+            --find-links "$WHEEL_DIR" -e ".[yolo-arm]"
         ;;
     *)
-        echo "Usage: bash setup.bash [base|yolo|cpu|gpu|arm|onnx-cpu|onnx-gpu]" >&2
+        echo "Usage: bash setup.bash [base|yolo|yolo-arm|dev|yolo-dev]" >&2
         exit 1
         ;;
 esac

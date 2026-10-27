@@ -6,6 +6,9 @@ from importlib import metadata
 from pathlib import Path
 import re
 
+from packaging.requirements import Requirement
+import pytest
+
 from data_collect_dag import __version__
 
 
@@ -24,7 +27,24 @@ def test_runtime_dependencies_are_declared():
 def test_optional_dependency_groups_are_declared():
     dist = metadata.distribution("data-collect-dag")
     extras = set(dist.metadata.get_all("Provides-Extra") or [])
-    assert {"yolo", "yolo-export", "onnx-cpu", "onnx-gpu", "tools", "test"} <= extras
+    assert extras == {"base", "yolo", "yolo-arm", "dev", "yolo-dev"}
+
+
+@pytest.mark.parametrize("mode, expected", [
+    ("base", set()),
+    ("yolo", {"ultralytics"}),
+    ("yolo-arm", {"ultralytics"}),
+    ("dev", {"pytest"}),
+    ("yolo-dev", {"ultralytics", "pytest"}),
+])
+def test_installation_mode_dependencies(mode, expected):
+    requirements = [Requirement(line) for line in metadata.requires("data-collect-dag") or []]
+    base = {requirement.name for requirement in requirements if requirement.marker is None}
+    selected = {
+        requirement.name for requirement in requirements
+        if requirement.marker is None or requirement.marker.evaluate({"extra": mode})
+    }
+    assert selected - base == expected
 
 
 def test_inference_backends_not_required_by_base_install():

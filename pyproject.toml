@@ -17,23 +17,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+base = []
 yolo = ["ultralytics>=8.4,<9"]
-yolo-export = ["ultralytics[export]>=8.4,<9"]
-# These are opt-in; a plain install must never bring in inference runtimes.
-# ONNX Runtime CPU/GPU distributions are alternatives, not joint dependencies.
-onnx-cpu = [
-    "onnx>=1.12,<1.18",
-    "onnxruntime>=1.12,<1.20",
-]
-onnx-gpu = [
-    "onnx>=1.12,<1.18",
-    "onnxruntime-gpu>=1.12,<1.20",
-]
-tools = [
-    "open3d>=0.18,<0.19",
-    "tqdm>=4.60,<5",
-]
-test = ["pytest>=7,<9"]
+# Jetson torch/torchvision wheels must be supplied explicitly; the installer
+# constrains these dependencies to local files before resolving Ultralytics.
+yolo-arm = ["ultralytics>=8.4,<9"]
+dev = ["pytest>=7,<9"]
+yolo-dev = ["ultralytics>=8.4,<9", "pytest>=7,<9"]
 
 [project.scripts]
 data_collect_dag = "data_collect_dag.cli:main"
