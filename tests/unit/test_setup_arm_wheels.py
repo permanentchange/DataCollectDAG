@@ -1,10 +1,12 @@
 """Exercise real Bash and pip resolution without changing installed packages."""
 
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 from zipfile import ZipFile
 
 import pytest
@@ -141,7 +143,7 @@ def test_arm_installs_local_wheels_before_yolo_with_file_constraints(tmp_path, m
     constraint_file = commands[2][4]
     assert commands[2] == [
         "-m", "pip", "install", "--constraint", constraint_file,
-        "--find-links", str(wheels), "-e", ".[yolo-arm]",
+        "--no-binary=psutil", "--find-links", str(wheels), "-e", ".[yolo-arm]",
     ]
     assert log.with_suffix(".constraints").read_text().splitlines() == [
         "torch @ " + (wheels / TORCH).as_uri(),
@@ -185,8 +187,23 @@ def _make_wheel(directory, name, version, requirements=()):
     return path
 
 
+def _make_sdist(directory, name, version):
+    path = directory / "{}-{}.tar.gz".format(name, version)
+    sources = {
+        "setup.py": "from setuptools import setup\nsetup(name={!r}, version={!r}, packages=[])\n".format(name, version),
+        "pyproject.toml": '[build-system]\nrequires = ["setuptools"]\nbuild-backend = "setuptools.build_meta"\n',
+    }
+    with tarfile.open(path, "w:gz") as archive:
+        for filename, content in sources.items():
+            data = content.encode("utf-8")
+            member = tarfile.TarInfo("{}-{}/{}".format(name, version, filename))
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return path
+
+
 @pytest.mark.parametrize("conflicting", [False, True])
-def test_real_pip_uses_only_selected_torch_wheels(tmp_path, monkeypatch, conflicting):
+def test_real_pip_uses_psutil_source_and_selected_torch_wheels(tmp_path, monkeypatch, conflicting):
     pip_environment = os.environ.copy()
     wheels, log = _prepare_installer(tmp_path, monkeypatch)
     torch = _make_wheel(wheels, "torch", "1.0")
@@ -200,14 +217,18 @@ def test_real_pip_uses_only_selected_torch_wheels(tmp_path, monkeypatch, conflic
     _make_wheel(index, "torch", "1.0")
     _make_wheel(index, "torch", "2.0")
     _make_wheel(index, "torchvision", "1.0", ["torch>=1.0"])
+    _make_wheel(index, "psutil", "6.1.1")
+    psutil = _make_sdist(index, "psutil", "6.1.1")
     _make_wheel(index, "dcd_test_yolo", "1.0", [
         "torch>=2.0" if conflicting else "torch>=1.0", "torchvision>=1.0",
+        "psutil==6.1.1",
     ])
     report = tmp_path / "report.json"
     result = subprocess.run(
         [
             sys.executable, "-m", "pip", "--isolated", "--disable-pip-version-check",
             "install", "--dry-run", "--ignore-installed", "--no-index",
+            "--no-binary=psutil", "--no-build-isolation",
             "--find-links", str(index), "--constraint", str(log.with_suffix(".constraints")),
             "--report", str(report), "dcd_test_yolo",
         ],
@@ -226,3 +247,4 @@ def test_real_pip_uses_only_selected_torch_wheels(tmp_path, monkeypatch, conflic
         }
         assert sources["torch"] == torch.as_uri()
         assert sources["torchvision"] == vision.as_uri()
+        assert sources["psutil"] == psutil.as_uri()

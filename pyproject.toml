@@ -21,7 +21,7 @@ base = []
 yolo = ["ultralytics>=8.4,<9"]
 # Jetson torch/torchvision wheels must be supplied explicitly; the installer
 # constrains these dependencies to local files before resolving Ultralytics.
-yolo-arm = ["ultralytics>=8.4,<9"]
+yolo-arm = ["ultralytics>=8.4,<9", "psutil==6.1.1"]
 dev = ["pytest>=7,<9"]
 yolo-dev = ["ultralytics>=8.4,<9", "pytest>=7,<9"]
 

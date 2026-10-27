@@ -42,7 +42,7 @@ The installer and pip extras support the same five modes:
 | --- | --- |
 | `base` | Base runtime, without inference packages; also the default |
 | `yolo` | Base runtime and Ultralytics, including its PyTorch requirements |
-| `yolo-arm` | YOLO with explicitly supplied local Jetson PyTorch wheels |
+| `yolo-arm` | YOLO with local Jetson PyTorch wheels and psutil 6.1.1 |
 | `dev` | Base runtime and pytest |
 | `yolo-dev` | YOLO and pytest |
 
@@ -61,16 +61,19 @@ Plain `pip install .` and `pip install '.[base]'` install the same base runtime.
 
 For Jetson YOLO installations, run `bash setup.bash yolo-arm`. It checks both local wheels before uninstalling packages, reinstalls `torch` and `torchvision` directly from `~/wheels` with `--no-deps`, then installs the YOLO extra with those exact wheel files as constraints. It never downloads remote torch or torchvision wheels, including same-version alternatives. Conflicting requirements fail rather than selecting another build; other dependencies can be downloaded normally. The script selects its preferred filenames or a single wheel per package. Set `DCD_WHEEL_DIR`, `DCD_TORCH_WHEEL` and `DCD_TORCHVISION_WHEEL` to choose specific compatible builds. Match Python, JetPack and CUDA to the device.
 
-For remote pip installation without a checkout, explicitly supply both local wheels in the same command. This example assumes exactly one compatible wheel per package in `~/wheels`:
+The `yolo-arm` extra pins `psutil==6.1.1`. The installer passes `--no-binary=psutil` to compile it from source as part of the same YOLO dependency installation; no separate psutil installation is needed. Prepare a C compiler and Python development headers, for example with `sudo apt-get install gcc python3-dev` on Ubuntu. Compilation failures stop installation and retain pip's diagnostics.
+
+For remote pip installation without a checkout, explicitly supply both local wheels and `--no-binary=psutil` in the same command. This example assumes exactly one compatible wheel per package in `~/wheels`:
 
 ```bash
 /usr/bin/python3 -m pip install --upgrade \
+  --no-binary=psutil \
   "$HOME"/wheels/torch-*.whl \
   "$HOME"/wheels/torchvision-*.whl \
   'data-collect-dag[yolo-arm] @ git+https://github.com/permanentchange/DataCollectDAG.git@main'
 ```
 
-Replace the globs with exact paths when multiple builds are present. The wheel paths fix the torch and torchvision sources during dependency resolution. The `[yolo-arm]` extra alone does not scan `~/wheels`, and `--find-links` alone does not guarantee selection of local builds.
+Replace the globs with exact paths when multiple builds are present. The wheel paths fix the torch and torchvision sources during dependency resolution. The `[yolo-arm]` extra alone does not scan `~/wheels` or enforce source installation of psutil: `--no-binary=psutil` must be supplied to pip. `--find-links` alone does not guarantee selection of local builds.
 
 ## Initialize configuration
 

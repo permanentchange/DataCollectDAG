@@ -33,7 +33,7 @@ def test_optional_dependency_groups_are_declared():
 @pytest.mark.parametrize("mode, expected", [
     ("base", set()),
     ("yolo", {"ultralytics"}),
-    ("yolo-arm", {"ultralytics"}),
+    ("yolo-arm", {"ultralytics", "psutil"}),
     ("dev", {"pytest"}),
     ("yolo-dev", {"ultralytics", "pytest"}),
 ])
@@ -45,6 +45,15 @@ def test_installation_mode_dependencies(mode, expected):
         if requirement.marker is None or requirement.marker.evaluate({"extra": mode})
     }
     assert selected - base == expected
+
+
+def test_arm_psutil_dependency_is_pinned():
+    requirements = [Requirement(line) for line in metadata.requires("data-collect-dag") or []]
+    psutil = [requirement for requirement in requirements if requirement.name == "psutil"]
+    assert len(psutil) == 1
+    assert str(psutil[0].specifier) == "==6.1.1"
+    assert psutil[0].marker is not None
+    assert psutil[0].marker.evaluate({"extra": "yolo-arm"})
 
 
 def test_inference_backends_not_required_by_base_install():

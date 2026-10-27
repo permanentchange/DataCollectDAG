@@ -96,7 +96,7 @@ PY
         # Install only the local wheels before resolving any YOLO dependencies.
         python -m pip install --no-deps "$torch_wheel" "$torchvision_wheel"
         python -m pip install --constraint "$constraint_file" \
-            --find-links "$WHEEL_DIR" -e ".[yolo-arm]"
+            --no-binary=psutil --find-links "$WHEEL_DIR" -e ".[yolo-arm]"
         ;;
     *)
         echo "Usage: bash setup.bash [base|yolo|yolo-arm|dev|yolo-dev]" >&2
