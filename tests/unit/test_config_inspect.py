@@ -68,6 +68,14 @@ def test_unknown_pipeline_and_bad_unselected_pipeline(config_file, monkeypatch, 
     assert not output.out and "pipeline broken node begin unknown node type: typo" in output.err
 
 
+def test_inspect_demo_displays_speed_gate(monkeypatch, capsys):
+    assert inspect(Path("demo/cfg.yaml"), monkeypatch, "fps") == 0
+    output = capsys.readouterr().out
+    for expected in ("Topics:       15", "iccp_status: /iccp_status", "speed_gate: speed_gate",
+                     "start -> speed_gate", "speed_gate -> fps_guard"):
+        assert expected in output
+
+
 @pytest.mark.parametrize("case,error", [
     ("section", "ros must be a mapping"), ("topic_field", "ros.topics.camera.msg_type"),
     ("runtime_number", "runtime.node_workers"), ("cache_number", "cache.camera.max_frames"),
@@ -132,7 +140,11 @@ def test_inspect_import_boundary_and_read_only(config_file):
     pipeline["nodes"].insert(1, {"node_id": "yolo", "type": "yolo_gate", "inputs": {"image": "main_frame"},
         "config": {"model_path": "missing.pt", "class_names": ["car"], "confidence_thresholds": [0.5],
                    "min_area_ratios": [0.01], "predict_conf": 0.1}})
-    pipeline["edges"] = [["begin", "yolo"], ["yolo", "finish"]]
+    raw["ros"]["topics"]["speed"] = {"topic": "/iccp_status", "msg_type": "missing_msgs/ICCPStatus", "role": "vehicle_status"}
+    raw["cache"]["defaults_by_role"]["vehicle_status"] = {"max_frames": 100, "max_age_sec": 2}
+    pipeline["nodes"].insert(1, {"node_id": "speed_gate", "type": "speed_gate",
+                                "inputs": {"reference_frame": "main_frame"}, "config": {"source": "speed"}})
+    pipeline["edges"] = [["begin", "speed_gate"], ["speed_gate", "yolo"], ["yolo", "finish"]]
     path.write_text(yaml.safe_dump(raw))
     before = {p: p.read_bytes() for p in path.parent.rglob("*") if p.is_file()}
     script = r'''

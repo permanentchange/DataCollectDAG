@@ -16,6 +16,7 @@ from data_collect_dag.models import (
     OdometryFrame,
     PointCloudFrame,
     TextFrame,
+    VehicleStatusFrame,
 )
 from data_collect_dag.ros_env import ensure_ros_python_path, resolve_message_definition_path
 from data_collect_dag.transforms import normalize_quaternion_xyzw
@@ -253,6 +254,10 @@ def frame_from_ros_message(topic_key: str, ros_topic: str, role: str, sensor_nam
             state=str(getattr(msg, "state", "")),
             raw_msg_ref=msg,
         )
+    if role == "vehicle_status":
+        source_ns = require_positive_stamp_ns(msg)
+        meta = FrameMeta(topic_key, ros_topic, sensor_name, role, source_ns, receive_ns, getattr(msg.header, "frame_id", ""))
+        return VehicleStatusFrame(meta=meta, speed_mps=float(msg.Current_Speed), raw_msg_ref=msg)
     if role == "nmea":
         source_ns = require_positive_stamp_ns(msg)
         meta = FrameMeta(topic_key, ros_topic, sensor_name, role, source_ns, receive_ns, getattr(msg.header, "frame_id", ""))

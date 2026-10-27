@@ -75,6 +75,11 @@ ros:
       msg_type: nav_msgs/Odometry
       role: odometry
       sensor_name: odom
+    iccp_status:
+      topic: /iccp_status
+      msg_type: vcu_msgs/ICCPStatus
+      role: vehicle_status
+      sensor_name: iccp_status
     localization:
       topic: /localization
       msg_type: igv_msgs/location
@@ -95,6 +100,9 @@ cache:
       max_frames: 20
       max_age_sec: 2.0
     odometry:
+      max_frames: 100
+      max_age_sec: 2.0
+    vehicle_status:
       max_frames: 100
       max_age_sec: 2.0
     localization:
@@ -126,6 +134,7 @@ pipelines:
       - bdstar_nmea
       - odom
       - localization
+      - iccp_status
     time_delay_ms: 500
     stop_conditions:
       max_duration_sec: 2
@@ -210,12 +219,21 @@ pipelines:
       - bdstar_nmea
       - odom
       - localization
+      - iccp_status
     time_delay_ms: 500
     stop_conditions:
       max_duration_sec: 6000
     nodes:
       - node_id: start
         type: start
+      - node_id: speed_gate
+        type: speed_gate
+        inputs:
+          reference_frame: main_frame
+        config:
+          source: iccp_status
+          min_abs_speed_mps: 0.01
+          max_age_ms: 500
       - node_id: fps_guard
         type: fps_guard
         config:
@@ -421,7 +439,8 @@ pipelines:
       - node_id: end
         type: end
     edges:
-      - [start, fps_guard]
+      - [start, speed_gate]
+      - [speed_gate, fps_guard]
       - [fps_guard, sync_top_lidar]
       - [sync_top_lidar, sync_corner_lidars]
       - [fps_guard, sync_images]
@@ -467,12 +486,21 @@ pipelines:
       - bdstar_nmea
       - odom
       - localization
+      - iccp_status
     time_delay_ms: 500
     stop_conditions:
       max_duration_sec: 6000
     nodes:
       - node_id: start
         type: start
+      - node_id: speed_gate
+        type: speed_gate
+        inputs:
+          reference_frame: main_frame
+        config:
+          source: iccp_status
+          min_abs_speed_mps: 0.01
+          max_age_ms: 500
       - node_id: fps_guard
         type: fps_guard
         config:
@@ -634,7 +662,8 @@ pipelines:
       - node_id: end
         type: end
     edges:
-      - [start, fps_guard]
+      - [start, speed_gate]
+      - [speed_gate, fps_guard]
       - [fps_guard, sync_top_lidar]
       - [sync_top_lidar, sync_corner_lidars]
       - [fps_guard, sync_images]
@@ -667,12 +696,21 @@ pipelines:
       - rear_right_lidar
       - front_left_lidar
       - rear_left_lidar
+      - iccp_status
     time_delay_ms: 500
     stop_conditions:
       max_duration_sec: 6000
     nodes:
       - node_id: start
         type: start
+      - node_id: speed_gate
+        type: speed_gate
+        inputs:
+          reference_frame: main_frame
+        config:
+          source: iccp_status
+          min_abs_speed_mps: 0.01
+          max_age_ms: 500
       - node_id: fps_guard
         type: fps_guard
         config:
@@ -814,7 +852,8 @@ pipelines:
       - node_id: end
         type: end
     edges:
-      - [start, fps_guard]
+      - [start, speed_gate]
+      - [speed_gate, fps_guard]
       - [fps_guard, sync_top_lidar]
       - [sync_top_lidar, sync_corner_lidars]
       - [fps_guard, sync_images]
@@ -851,12 +890,21 @@ pipelines:
       - bdstar_nmea
       - odom
       - localization
+      - iccp_status
     time_delay_ms: 500
     stop_conditions:
       max_duration_sec: 6000
     nodes:
       - node_id: start
         type: start
+      - node_id: speed_gate
+        type: speed_gate
+        inputs:
+          reference_frame: main_frame
+        config:
+          source: iccp_status
+          min_abs_speed_mps: 0.01
+          max_age_ms: 500
       - node_id: fps_guard
         type: fps_guard
         config:
@@ -1108,7 +1156,8 @@ pipelines:
       - node_id: end
         type: end
     edges:
-      - [start, fps_guard]
+      - [start, speed_gate]
+      - [speed_gate, fps_guard]
       - [fps_guard, sync_images]
       - [sync_images, front_camera_yolo_gate]
       - [front_camera_yolo_gate, sync_top_lidar]
@@ -1155,12 +1204,21 @@ pipelines:
       - bdstar_nmea
       - odom
       - localization
+      - iccp_status
     time_delay_ms: 500
     stop_conditions:
       max_duration_sec: 6000
     nodes:
       - node_id: start
         type: start
+      - node_id: speed_gate
+        type: speed_gate
+        inputs:
+          reference_frame: main_frame
+        config:
+          source: iccp_status
+          min_abs_speed_mps: 0.01
+          max_age_ms: 500
       - node_id: fps_guard
         type: fps_guard
         config:
@@ -1444,7 +1502,8 @@ pipelines:
       - node_id: end
         type: end
     edges:
-      - [start, fps_guard]
+      - [start, speed_gate]
+      - [speed_gate, fps_guard]
       - [fps_guard, sync_top_lidar]
       - [sync_top_lidar, sync_corner_lidars]
       - [fps_guard, sync_images]

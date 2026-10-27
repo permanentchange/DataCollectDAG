@@ -139,7 +139,7 @@ pipelines:
 
 完整示例：`demo/cfg.yaml` 包含 `init`、`fps`、`fps_undist`、`fps_undist_nomotion`、`fps_with_yolo`、`compare_motion`。`init` 预检查 topic、执行同步，活动时长上限为 2 秒，不包含保存节点；其他 pipeline 的活动时长上限为 6,000 秒。`fps`、`fps_undist`、`fps_undist_nomotion` 和 `fps_with_yolo` 的目标频率为 1 FPS。`fps_undist` 按相机绑定顺序保存五路原图 JPEG，并执行 FPS 控制、同步和点云运动补偿；`compare_motion` 将两种点云写入 `collect_demo` 和 `collect_demo_no_motion`。会话完成后程序保持可控制状态，不自动退出。
 
-`fps_undist_nomotion` 保存五路原始图像，以五个 `pointcloud_transform` 节点将雷达点云按静态外参转换到 `base` 后合并，写入 `collect_demo`；不执行图像去畸变或自车运动补偿。它保留 `fps_undist` 的同步、相机顺序和保存参数，预检查仅包含五路相机与五路雷达，窗口为 500 ms。定位、IMU、里程计及 NMEA 无需发布消息，但全局 `ros.topics` 引用的消息类型仍需可解析。运行中的程序不热加载配置；修改后须重新启动程序，使用导出配置时须单独更新或重新导出该 YAML。
+`fps_undist_nomotion` 保存五路原始图像，以五个 `pointcloud_transform` 节点将雷达点云按静态外参转换到 `base` 后合并，写入 `collect_demo`；不执行图像去畸变或自车运动补偿。它保留 `fps_undist` 的同步、相机顺序和保存参数，预检查包含五路相机、五路雷达与 `/iccp_status`，共 11 路，窗口为 500 ms。定位、IMU、里程计及 NMEA 无需发布消息，但全局 `ros.topics` 引用的消息类型仍需可解析，包括 `vcu_msgs/ICCPStatus`。所有 demo pipeline 均预检查车速 topic；`init` 不按速度过滤，因此停车时仍执行同步。运行中的程序不热加载配置；修改后须重新启动程序，使用导出配置时须单独更新或重新导出该 YAML。
 
 ## 3. 内置节点
 
@@ -149,6 +149,7 @@ pipelines:
 | --- | --- | --- |
 | 图结构 | `start`、`end` | 样本 DAG 的入口和出口 |
 | 采样频率 | `fps_guard`、`fps_marker` | 根据主帧时间戳限频并更新 gate 标记 |
+| 速度筛选 | `speed_gate` | 按主帧时间匹配车速，跳过低速或速度不可用的样本 |
 | 同步 | `time_sync`、`multi_time_sync` | 依据时间戳匹配缓存帧；支持 `nearest`、`latest_before` |
 | 区域筛选 | `localization_range`、`pointcloud_radius_crop`、`pointcloud_roi_crop` | 按定位范围或空间范围筛选 |
 | 点云 | `pointcloud_motion_compensation`、`pointcloud_transform`、`aggregate_pointclouds` | 运动补偿、坐标变换、聚合 |
@@ -158,6 +159,21 @@ pipelines:
 
 `fps_guard` 根据主帧时间戳、同一 `gate_id` 的最近标记和正数 `max_fps` 决定是否通过；`fps_marker` 更新时间戳。demo 将 marker 接在保存节点之后。实现位于 `nodes/common.py`。
 
+`speed_gate` 要求 `inputs.reference_frame` 指向参考帧，`config.source` 引用 `role: vehicle_status` 的 topic。该 role 从 `vcu_msgs/ICCPStatus` 的 `Current_Speed` 提取 m/s 速度，使用正数 `header.stamp` 作为源时间戳，并保留原始消息。demo 的车速缓存保留 100 帧、2 秒。节点按源时间戳选取不晚于参考帧的最近状态，忽略到达顺序，不额外等待消息；两者必须使用同一时间基准。
+
+```yaml
+- node_id: speed_gate
+  type: speed_gate
+  inputs:
+    reference_frame: main_frame
+  config:
+    source: iccp_status
+    min_abs_speed_mps: 0.01
+    max_age_ms: 500
+```
+
+`min_abs_speed_mps` 默认为 `0.01`，必须为非负、有限且不超出 float32 范围的数值；阈值以 float32 精度比较，绝对速度小于阈值时返回 `SKIP_SAMPLE`，等于阈值时通过。`max_age_ms` 默认为 `500`，必须为正的有限数值，年龄恰好达到上限仍有效。速度状态缺失、过期或只有未来消息时，跳过原因是 `<node_id>_speed_not_matched`；最近状态的速度为 `NaN/Inf` 时为 `<node_id>_invalid_speed`，不会回退使用较旧的有效速度；低速时为 `<node_id>_below_min_speed`。原因进入现有 `skip_reasons`，debug 日志包含速度、阈值、源时间戳和年龄。有效车速恢复后自动继续。五个采集 pipeline 将节点串在 `start` 与 `fps_guard` 之间；跳过的帧不会进入后续同步、推理、保存，也不会更新保存 FPS 标记。自定义配置通过显式添加节点启用过滤。
+
 `xtreme1_structured_save.config.include_distortion_params` 是布尔值，默认 `false`；`fps_undist` 和 `fps_undist_nomotion` 设置为 `true`，在每个相机 JSON 的 `items[i]` 中增加与 `camera_internal` 同级的 `dist_model` 和 `dist_coeffs`。数值取自对应源标定，系数不随分辨率缩放；内参根据保存分辨率缩放。节点初始化时验证畸变参数；启用该模式但存在对应相机的去畸变元数据时拒绝保存该样本，避免参数与图像不匹配。`include_distortion_params: false` 时不写入这些字段。
 
 `yolo_gate` 的 `config` 必须包含 `model_path`、`class_names`、`confidence_thresholds`、`min_area_ratios`、`predict_conf`，同时将图像输入映射为 `inputs.image`。三个列表非空、长度一致并按下标对齐，类别名不可重复，阈值为 0 到 1 的有限数值；`predict_conf` 不得大于最小的类别阈值；`failure_policy` 只接受 `skip_sample`。`device: cpu` 为默认设置；`gpu`、`cuda` 映射到设备 `0`，`gpu:N` 映射到 `N`；`device: auto` 对非 `.engine` 模型优先检查 CUDA，并在推理异常时重试 CPU。明确指定 CUDA 且不可用则初始化失败；TensorRT `.engine` 不支持自动切换到 CPU。
@@ -166,7 +182,7 @@ pipelines:
 
 ## 4. 数据与文件
 
-`ros_messages.py` 将 ROS 消息包装为图像、点云、定位、IMU、里程计或文本 frame。图像解码和点云解析可以在处理节点使用数据时延后进行。标定 JSON 通过 `app.py::load_calibration` 读取，使用顶层 `images` 和 `pointclouds`；点云变换只选取包含 `sensor2base` 的条目。
+`ros_messages.py` 将 ROS 消息包装为图像、点云、定位、IMU、里程计、车辆状态或文本 frame。图像解码和点云解析可以在处理节点使用数据时延后进行。标定 JSON 通过 `app.py::load_calibration` 读取，使用顶层 `images` 和 `pointclouds`；点云变换只选取包含 `sensor2base` 的条目。
 
 相机标定支持 `dist_model: equidistant`，要求 `dist_coeffs` 含四个有限数值，顺序为 OpenCV fisheye 的 `[k1, k2, k3, k4]`。`image_undistort` 使用 OpenCV fisheye 映射；输入与标定宽高比一致时缩放内参，宽高比不一致时跳过该样本。`write_debug_artifacts: true` 将诊断图像和参数写入会话的 `diagnostics/undistort/` 目录，默认值为 `false`。
 

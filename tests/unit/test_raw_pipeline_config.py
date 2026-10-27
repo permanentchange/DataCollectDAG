@@ -44,8 +44,9 @@ def test_fps_undist_nomotion_uses_static_lidar_transforms_and_sensor_prechecks()
     assert pipeline.stop_conditions == reference.stop_conditions
     assert pipeline.time_delay_ms == reference.time_delay_ms == 500
     sensors = {key for key, topic in config.topics.items() if topic.role in {"image", "pointcloud"}}
-    assert len(pipeline.topics) == len(sensors) == 10
-    assert set(pipeline.topics) == sensors
+    assert len(sensors) == 10
+    assert len(pipeline.topics) == 11
+    assert set(pipeline.topics) == sensors | {"iccp_status"}
     forbidden = {"image_undistort", "pointcloud_motion_compensation", "yolo_gate"}
     assert not any(node.node_type in forbidden for node in pipeline.nodes_by_id.values())
     transforms = [node for node in pipeline.nodes_by_id.values() if node.node_type == "pointcloud_transform"]
@@ -64,7 +65,7 @@ def test_fps_undist_nomotion_uses_static_lidar_transforms_and_sensor_prechecks()
     assert set(aggregate.config["required_inputs"]) == {node.outputs["pointcloud"] for node in transforms}
     assert set(pipeline.predecessors["aggregate_pointclouds"]) == {node.node_id for node in transforms}
     assert aggregate.outputs == reference.nodes_by_id["aggregate_pointclouds"].outputs
-    for name in ("start", "fps_guard", "sync_top_lidar", "sync_corner_lidars", "sync_images",
+    for name in ("start", "speed_gate", "fps_guard", "sync_top_lidar", "sync_corner_lidars", "sync_images",
                  "save_xtreme1", "fps_marker", "end"):
         assert pipeline.nodes_by_id[name] == reference.nodes_by_id[name]
     assert set(pipeline.predecessors["save_xtreme1"]) == {"aggregate_pointclouds", "sync_images"}

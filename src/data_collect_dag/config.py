@@ -358,6 +358,23 @@ def _validate_node_config(pipeline_name: str, node_config: NodeConfig, topics: D
         source = str(node_config.config.get("source", ""))
         if source not in topics:
             raise ConfigError(f"pipeline {pipeline_name} node {node_config.node_id} references unknown source topic_key: {source}")
+    elif node_config.node_type == "speed_gate":
+        location = f"pipeline {pipeline_name} node {node_config.node_id}"
+        source = _required(node_config.config, "source", location)
+        if source not in topics:
+            raise ConfigError(f"{location} references unknown source topic_key: {source}")
+        if topics[source].role != "vehicle_status":
+            raise ConfigError(f"{location} source must have role vehicle_status")
+        _required(node_config.inputs, "reference_frame", f"{location}.inputs")
+        for key, default in (("min_abs_speed_mps", 0.01), ("max_age_ms", 500.0)):
+            value = node_config.config.get(key, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ConfigError(f"{location} {key} must be a finite number")
+            value = float(value)
+            if not math.isfinite(value) or value < 0 or (key == "max_age_ms" and value == 0):
+                raise ConfigError(f"{location} {key} must be finite and {'> 0' if key == 'max_age_ms' else '>= 0'}")
+            if key == "min_abs_speed_mps" and value > 3.4028234663852886e38:
+                raise ConfigError(f"{location} {key} exceeds float32 range")
     elif node_config.node_type == "fps_guard":
         _validate_non_empty_gate_id(pipeline_name, node_config)
         if "max_fps" not in node_config.config:

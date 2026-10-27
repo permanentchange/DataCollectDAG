@@ -12,7 +12,8 @@ def test_load_demo_config():
     assert "localization" in config.topics
     assert config.runtime.debug is True
     pipeline = config.pipelines["fps"]
-    assert pipeline.successors["start"] == ["fps_guard"]
+    assert pipeline.successors["start"] == ["speed_gate"]
+    assert pipeline.successors["speed_gate"] == ["fps_guard"]
     assert pipeline.successors["save_xtreme1"] == ["fps_marker"]
     assert pipeline.successors["fps_marker"] == ["end"]
     assert config.control.control_topic == "/data_collect/control"

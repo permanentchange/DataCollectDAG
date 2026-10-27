@@ -9,6 +9,7 @@ NODE_TYPES: Dict[str, Tuple[str, str]] = {
     "start": ("common", "StartNode"),
     "end": ("common", "EndNode"),
     "fps_guard": ("common", "FpsGuardNode"),
+    "speed_gate": ("common", "SpeedGateNode"),
     "fps_marker": ("common", "FpsMarkerNode"),
     "image_undistort": ("image_undistort", "ImageUndistortNode"),
     "time_sync": ("common", "TimeSyncNode"),

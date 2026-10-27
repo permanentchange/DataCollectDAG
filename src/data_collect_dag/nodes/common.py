@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +27,37 @@ class StartNode(BaseNode):
 class EndNode(BaseNode):
     def run(self, sample) -> NodeOutcome:
         return self.ok()
+
+
+class SpeedGateNode(BaseNode):
+    def setup(self) -> None:
+        self._source = str(self.config["source"])
+        # ICCPStatus.Current_Speed is float32; compare the threshold at the
+        # same precision so a reported 0.01 m/s passes a 0.01 m/s threshold.
+        self._min_abs_speed_mps = float(np.float32(self.config.get("min_abs_speed_mps", 0.01)))
+        self._max_age_sec = float(self.config.get("max_age_ms", 500.0)) / 1000.0
+
+    def run(self, sample) -> NodeOutcome:
+        reference = sample.get(self.inputs["reference_frame"])
+        timestamp_ns = int(reference.meta.source_timestamp_ns)
+        frame = self.session.cache.query_latest_before(self._source, timestamp_ns, self._max_age_sec)
+        metadata = {"source": self._source, "min_abs_speed_mps": self._min_abs_speed_mps}
+        reason = ""
+        if frame is None:
+            reason = "speed_not_matched"
+        else:
+            speed = float(frame.speed_mps)
+            metadata.update(speed_mps=speed, source_timestamp_ns=int(frame.meta.source_timestamp_ns),
+                            age_ms=(timestamp_ns - frame.meta.source_timestamp_ns) / 1_000_000.0)
+            if not math.isfinite(speed):
+                reason = "invalid_speed"
+            elif abs(speed) < self._min_abs_speed_mps:
+                reason = "below_min_speed"
+        self.logger.debug("speed gate sample_id=%s node_id=%s reason=%s metadata=%s",
+                          sample.sample_id, self.node_id, reason or "passed", metadata)
+        if reason:
+            return NodeOutcome(status=NodeResult.SKIP_SAMPLE, reason=f"{self.node_id}_{reason}", metadata=metadata)
+        return self.ok(metadata=metadata)
 
 
 class FpsGuardNode(BaseNode):

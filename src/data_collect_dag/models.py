@@ -135,6 +135,13 @@ class OdometryFrame:
 
 
 @dataclass(frozen=True)
+class VehicleStatusFrame:
+    meta: FrameMeta
+    speed_mps: float
+    raw_msg_ref: Any = None
+
+
+@dataclass(frozen=True)
 class TextFrame:
     meta: FrameMeta
     text: str

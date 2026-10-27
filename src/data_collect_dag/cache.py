@@ -61,10 +61,12 @@ class SessionInputCache:
 
     def query_latest_before(self, topic_key: str, timestamp_ns: int, max_age_sec: float) -> Optional[FrameLike]:
         with self._lock:
-            min_ts = int(timestamp_ns - max_age_sec * 1_000_000_000)
+            timestamp_ns = int(timestamp_ns)
+            max_age_ns = max_age_sec * 1_000_000_000
             best = None
             for item in self._buffers.get(topic_key, ()):
-                if min_ts <= item.source_timestamp_ns <= int(timestamp_ns):
+                if (0 <= timestamp_ns - item.source_timestamp_ns <= max_age_ns
+                        and (best is None or item.source_timestamp_ns >= best.meta.source_timestamp_ns)):
                     best = item.frame
             return best
 

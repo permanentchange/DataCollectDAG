@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
+from data_collect_dag.models import VehicleStatusFrame
 from data_collect_dag.ros_messages import ensure_image_frame_decoded, ensure_pointcloud_frame_parsed, frame_from_ros_message
 
 
@@ -11,6 +13,28 @@ class Stamp:
 
     def to_nsec(self):
         return self._ns
+
+
+@pytest.mark.parametrize("speed", [0.0, -1.25, float(np.float32(0.01)), float("nan"), float("inf")])
+def test_frame_from_ros_vehicle_status_message(speed):
+    msg = SimpleNamespace(header=SimpleNamespace(stamp=Stamp(1000), frame_id="/iccp_status"), Current_Speed=speed)
+    frame = frame_from_ros_message("iccp_status", "/iccp_status", "vehicle_status", "vcu", msg)
+    assert isinstance(frame, VehicleStatusFrame)
+    assert frame.meta.source_timestamp_ns == 1000
+    assert frame.meta.frame_id == "/iccp_status"
+    assert frame.raw_msg_ref is msg
+    if np.isnan(speed):
+        assert np.isnan(frame.speed_mps)
+    else:
+        assert frame.speed_mps == speed
+
+
+@pytest.mark.parametrize("stamp", [0, -1, None])
+def test_vehicle_status_requires_positive_header_stamp(stamp):
+    header = None if stamp is None else SimpleNamespace(stamp=Stamp(stamp), frame_id="")
+    msg = SimpleNamespace(header=header, Current_Speed=1.0)
+    with pytest.raises(ValueError, match="header.stamp"):
+        frame_from_ros_message("iccp_status", "/iccp_status", "vehicle_status", "vcu", msg)
 
 
 def test_frame_from_ros_image_message():

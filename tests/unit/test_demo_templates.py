@@ -33,6 +33,11 @@ def test_export_rewrites_paths_and_loads_config_and_calibrations(tmp_path, monke
     config = load_app_config(destination / "cfg.yaml")
     assert "fps_undist" in config.pipelines
     assert "fps_undist_nomotion" in config.pipelines
+    assert config.topics["iccp_status"].msg_type == "vcu_msgs/ICCPStatus"
+    assert config.topics["iccp_status"].role == "vehicle_status"
+    for name, pipeline in config.pipelines.items():
+        assert "iccp_status" in pipeline.topics
+        assert ("speed_gate" in pipeline.nodes_by_id) == (name != "init")
     assert config.pipelines["fps_undist_nomotion"] == load_app_config(
         Path(__file__).resolve().parents[2] / "demo/cfg.yaml"
     ).pipelines["fps_undist_nomotion"]
