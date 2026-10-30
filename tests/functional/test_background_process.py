@@ -10,6 +10,8 @@ import sys
 import time
 
 import pytest
+
+from tests.helpers import process_alive as _is_live, terminate_process, wait_until
 import yaml
 
 
@@ -57,20 +59,12 @@ RosAdapter.stop = stop
 '''
 
 
-def _is_live(pid):
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[0]
-    except FileNotFoundError:
-        return False
-    return state != "Z"
-
 
 def _wait(predicate, log):
-    deadline = time.monotonic() + 5
-    while not predicate():
-        if time.monotonic() > deadline:
-            pytest.fail(f"background process timed out; log:\n{log.read_text() if log.exists() else 'missing'}")
-        time.sleep(0.01)
+    try:
+        wait_until(predicate, 5)
+    except AssertionError:
+        pytest.fail(f"background process timed out; log:\n{log.read_text() if log.exists() else 'missing'}")
 
 
 def _launch(tmp_path):
@@ -137,10 +131,4 @@ def test_background_survives_launcher_and_exits_cleanly(tmp_path, shutdown_mode)
         assert (root / info["session_id"] / "saved_samples.json").exists()
         assert "app runtime stopped" in log.read_text()
     finally:
-        if _is_live(pid):
-            os.kill(pid, signal.SIGTERM)
-            try:
-                _wait(lambda: not _is_live(pid), log)
-            finally:
-                if _is_live(pid):
-                    os.kill(pid, signal.SIGKILL)
+        terminate_process(pid)

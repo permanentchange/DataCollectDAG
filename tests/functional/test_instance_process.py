@@ -11,6 +11,8 @@ import uuid
 
 import pytest
 
+from tests.helpers import process_alive as alive, wait_until
+
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_HOOK = '''
@@ -65,20 +67,11 @@ def wait_ready(path, pid=None):
     return int(path.read_text())
 
 
-def alive(pid):
-    try:
-        return Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()[0] != "Z"
-    except FileNotFoundError:
-        return False
-
 
 def stop(pid):
     if alive(pid):
         os.kill(pid, signal.SIGKILL)
-    deadline = time.monotonic() + 5
-    while alive(pid):
-        assert time.monotonic() < deadline
-        time.sleep(0.02)
+    wait_until(lambda: not alive(pid), 5, f"process {pid} survived SIGKILL")
 
 
 @pytest.mark.parametrize("first_background", [False, True])

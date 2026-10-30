@@ -168,55 +168,13 @@ class SessionRuntime:
                 self._completion_requested = True
                 self._run_started_monotonic = None
                 self._state_condition.notify_all()
-            self.cancel_event.set()
-            self._run_cleanup_step(cleanup_errors, "storage_monitor_shutdown", self._stop_storage_monitor)
-            self._run_cleanup_step(cleanup_errors, "unbind_session", lambda: self.ros_adapter.unbind_session(self))
-            for _ in self._workers:
-                try:
-                    self.main_frame_queue.put_nowait(MainFrameEvent(main_frame=None))
-                except queue.Full:
-                    pass
-            for index, worker in enumerate(self._workers):
-                self._run_cleanup_step(
-                    cleanup_errors,
-                    f"worker_join[{index}]",
-                    lambda worker=worker: worker.join(timeout=self.app_config.runtime.stop_timeout_sec),
-                )
-            self._workers = []
-            if self._duration_thread is not None:
-                duration_thread = self._duration_thread
-                self._run_cleanup_step(
-                    cleanup_errors,
-                    "duration_thread_join",
-                    lambda: duration_thread.join(timeout=self.app_config.runtime.stop_timeout_sec),
-                )
-                self._duration_thread = None
-            for node_id, node in reversed(list(self._nodes.items())):
-                self._run_cleanup_step(cleanup_errors, f"node_teardown[{node_id}]", node.teardown)
-            if self._node_pool is not None:
-                node_pool = self._node_pool
-                self._run_cleanup_step(cleanup_errors, "node_pool_shutdown", lambda: node_pool.shutdown(wait=True))
-                self._node_pool = None
+            self._release_runtime_resources(cleanup_errors)
             if self._log_handler is not None:
                 log_handler = self._log_handler
                 self._run_cleanup_step(cleanup_errors, "detach_log_handler", lambda: detach_handler(log_handler))
                 self._log_handler = None
             self._last_error = "; ".join([str(exc)] + cleanup_errors)
-            summary = SessionSummary(
-                session_id=self.session_id,
-                pipeline_name=self.pipeline.name,
-                start_time=self._start_time,
-                end_time=utc_now_iso(),
-                end_status=RecentSessionStatus.FAILED.value,
-                end_reason="setup_failed",
-                config_path=str(self.app_config.config_path),
-                session_root=str(self.session_root),
-                pipeline_params={},
-                metrics=self.metrics.metrics.to_dict(),
-                save_outputs=list(self.metrics.metrics.save_outputs),
-                last_error=self._last_error,
-                warnings=list(self._warnings),
-            )
+            summary = self._build_summary(RecentSessionStatus.FAILED, "setup_failed")
             try:
                 self.summary_writer.write(self.session_root / "session_summary.json", summary)
             except Exception as summary_exc:
@@ -257,6 +215,42 @@ class SessionRuntime:
                 self._active_elapsed_sec += max(0.0, time.monotonic() - self._run_started_monotonic)
                 self._run_started_monotonic = None
             self._state_condition.notify_all()
+        self._release_runtime_resources(cleanup_errors)
+        self._run_cleanup_step(cleanup_errors, "write_saved_samples", self._write_sample_records)
+        if self._log_handler is not None:
+            log_handler = self._log_handler
+            self._run_cleanup_step(cleanup_errors, "detach_log_handler", lambda: detach_handler(log_handler))
+            self._log_handler = None
+        if cleanup_errors:
+            self._end_status = RecentSessionStatus.FAILED
+            self._end_reason = f"{reason}_failed"
+            self._last_error = "; ".join(cleanup_errors)
+        summary = self._build_summary(self._end_status, self._end_reason)
+        try:
+            self.summary_writer.write(self.session_root / "session_summary.json", summary)
+        except Exception as exc:
+            self.logger.exception("failed to write session summary session_id=%s", self.session_id)
+            cleanup_errors.append(f"write_session_summary: {exc}")
+            self._end_status = RecentSessionStatus.FAILED
+            self._end_reason = f"{reason}_failed"
+            self._last_error = "; ".join(cleanup_errors)
+        self.status_manager.update_metrics(self.metrics.metrics)
+        self._refresh_storage_metadata()
+        if self._last_error is not None:
+            self.status_manager.set_last_error(self._last_error)
+        self.status_manager.set_idle(self._end_status)
+        self.logger.info(
+            "session stopped session_id=%s samples_started=%s samples_saved=%s samples_skipped=%s samples_failed=%s",
+            self.session_id,
+            self.metrics.metrics.samples_started,
+            self.metrics.metrics.samples_saved,
+            self.metrics.metrics.samples_skipped,
+            self.metrics.metrics.samples_failed,
+        )
+        if cleanup_errors:
+            raise RuntimeError(self._last_error)
+
+    def _release_runtime_resources(self, cleanup_errors: List[str]) -> None:
         self.cancel_event.set()
         self._run_cleanup_step(cleanup_errors, "storage_monitor_shutdown", self._stop_storage_monitor)
         self._run_cleanup_step(cleanup_errors, "unbind_session", lambda: self.ros_adapter.unbind_session(self))
@@ -286,22 +280,15 @@ class SessionRuntime:
             node_pool = self._node_pool
             self._run_cleanup_step(cleanup_errors, "node_pool_shutdown", lambda: node_pool.shutdown(wait=True))
             self._node_pool = None
-        self._run_cleanup_step(cleanup_errors, "write_saved_samples", self._write_sample_records)
-        if self._log_handler is not None:
-            log_handler = self._log_handler
-            self._run_cleanup_step(cleanup_errors, "detach_log_handler", lambda: detach_handler(log_handler))
-            self._log_handler = None
-        if cleanup_errors:
-            self._end_status = RecentSessionStatus.FAILED
-            self._end_reason = f"{reason}_failed"
-            self._last_error = "; ".join(cleanup_errors)
-        summary = SessionSummary(
+
+    def _build_summary(self, status: RecentSessionStatus, reason: str) -> SessionSummary:
+        return SessionSummary(
             session_id=self.session_id,
             pipeline_name=self.pipeline.name,
             start_time=self._start_time,
             end_time=utc_now_iso(),
-            end_status=self._end_status.value,
-            end_reason=self._end_reason,
+            end_status=status.value,
+            end_reason=reason,
             config_path=str(self.app_config.config_path),
             session_root=str(self.session_root),
             pipeline_params={},
@@ -310,29 +297,6 @@ class SessionRuntime:
             last_error=self._last_error,
             warnings=list(self._warnings),
         )
-        try:
-            self.summary_writer.write(self.session_root / "session_summary.json", summary)
-        except Exception as exc:
-            self.logger.exception("failed to write session summary session_id=%s", self.session_id)
-            cleanup_errors.append(f"write_session_summary: {exc}")
-            self._end_status = RecentSessionStatus.FAILED
-            self._end_reason = f"{reason}_failed"
-            self._last_error = "; ".join(cleanup_errors)
-        self.status_manager.update_metrics(self.metrics.metrics)
-        self._refresh_storage_metadata()
-        if self._last_error is not None:
-            self.status_manager.set_last_error(self._last_error)
-        self.status_manager.set_idle(self._end_status)
-        self.logger.info(
-            "session stopped session_id=%s samples_started=%s samples_saved=%s samples_skipped=%s samples_failed=%s",
-            self.session_id,
-            self.metrics.metrics.samples_started,
-            self.metrics.metrics.samples_saved,
-            self.metrics.metrics.samples_skipped,
-            self.metrics.metrics.samples_failed,
-        )
-        if cleanup_errors:
-            raise RuntimeError(self._last_error)
 
     def _run_cleanup_step(self, errors: List[str], stage: str, operation: Callable[[], None]) -> None:
         try:

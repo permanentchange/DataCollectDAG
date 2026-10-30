@@ -1,67 +1,10 @@
 #!/usr/bin/env python3
-import argparse,bisect,statistics
-
-IMG=[
-"/miivii_gmsl_camera_node/miivii_gmsl/image2",
-"/miivii_gmsl_camera_node/miivii_gmsl/image4",
-"/miivii_gmsl_camera_node/miivii_gmsl/image5",
-"/miivii_gmsl_camera_node/miivii_gmsl/image6",
-"/miivii_gmsl_camera_node/miivii_gmsl/image7"]
-PCD=["/livox/lidar_lb","/livox/lidar_lf","/livox/lidar_rb",
-"/livox/lidar_rf","/rslidar_points"]
-
-def read_bag(path,topics):
-    import rosbag
-    b=rosbag.Bag(path)
-    d={t:[m.header.stamp.to_sec() for _,m,_ in b.read_messages(topics=[t])] for t in topics}
-    b.close()
-    return d
-
-def read_ros(topics,img):
-    import rospy
-    from sensor_msgs.msg import Image,PointCloud2
-    rospy.init_node("sync_check")
-    d={t:[] for t in topics}
-    def cb(m,t): d[t].append(m.header.stamp.to_sec())
-    for t in topics:
-        rospy.Subscriber(t,Image if t in img else PointCloud2,cb,t)
-    print("collecting 5s...")
-    rospy.sleep(5)
-    return d
-
-def main(base,bt,d):
-    print(f"\nMain: {base} ({len(bt)} msgs)\nOffset(sensor-main):")
-    for k,ts in d.items():
-        if not bt:
-            print(f"{k}: n/a (main topic has no messages)")
-            continue
-        if not ts:
-            print(f"{k}: n/a (sensor topic has no messages)")
-            continue
-        r=[]
-        for t in bt:
-            i=bisect.bisect_left(ts,t)
-            n=ts[0] if i==0 else ts[-1] if i==len(ts) else min(ts[i-1:i+1],key=lambda x:abs(x-t))
-            r.append((n-t)*1000)
-        absolute_offsets = [abs(offset) for offset in r]
-        print(
-            f"{k}: abs_min={min(absolute_offsets):.3f} ms "
-            f"abs_median={statistics.median(absolute_offsets):.3f} ms "
-            f"abs_max={max(absolute_offsets):.3f} ms "
-            f"signed_mean={statistics.mean(r):+.3f} ms"
-        )
-
-if __name__=="__main__":
-    p=argparse.ArgumentParser()
-    p.add_argument("--img-topics",nargs="+",default=IMG)
-    p.add_argument("--pcd-topics",nargs="+",default=PCD)
-    p.add_argument("--main-topic",default="/rslidar_points")
-    p.add_argument("--bag")
-    a=p.parse_args()
-
-    topics=a.img_topics+a.pcd_topics
-    if a.main_topic not in topics: topics.append(a.main_topic)
-
-    d=read_bag(a.bag,topics) if a.bag else read_ros(topics,a.img_topics)
-    bt=d.pop(a.main_topic)
-    main(a.main_topic,bt,d)
+"""Compatibility entry point; implementation lives in tools.lib.ros."""
+import sys
+from pathlib import Path
+_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_root))
+sys.path.insert(0, str(_root / "src"))
+from tools.lib.ros import *
+if __name__ == "__main__":
+    raise SystemExit(sync() or 0)

@@ -36,34 +36,37 @@ def project_base_points(
     height: int,
 ) -> Tuple[np.ndarray, Dict[str, int]]:
     """Project base-frame points into an undistorted pinhole image."""
-    points = np.asarray(points_xyz, dtype=np.float64)
-    matrix = np.asarray(camera_matrix, dtype=np.float64)
-    transform = np.asarray(base_to_camera, dtype=np.float64)
-    if points.ndim != 2 or points.shape[1] != 3:
-        raise ValueError("points_xyz must have shape Nx3")
-    if matrix.shape != (3, 3):
-        raise ValueError("camera_matrix must have shape 3x3")
-    if transform.shape != (4, 4):
-        raise ValueError("base_to_camera must have shape 4x4")
-    if width <= 0 or height <= 0:
-        raise ValueError("image dimensions must be positive")
+    pixels, _indices, stats = project_camera_points(points_xyz, camera_matrix, base_to_camera, width, height)
+    return pixels, {key: stats[key] for key in ("input_points", "points_in_front", "points_in_image")}
 
-    camera_points = np.concatenate(
-        [points, np.ones((points.shape[0], 1), dtype=np.float64)], axis=1
-    ) @ transform.T
-    in_front = camera_points[:, 2] > 0.0
-    visible = camera_points[in_front, :3]
-    projected = visible @ matrix.T
-    pixels_float = projected[:, :2] / projected[:, 2:3]
-    pixels = np.rint(pixels_float).astype(np.int32)
-    in_image = (
-        (pixels[:, 0] >= 0)
-        & (pixels[:, 0] < width)
-        & (pixels[:, 1] >= 0)
-        & (pixels[:, 1] < height)
-    )
-    return pixels[in_image], {
-        "input_points": int(points.shape[0]),
-        "points_in_front": int(in_front.sum()),
-        "points_in_image": int(in_image.sum()),
-    }
+
+def project_camera_points(points, matrix, transform, width, height, model=None, coefficients=None):
+    points = np.asarray(points, dtype=np.float64)
+    matrix = np.asarray(matrix, dtype=np.float64)
+    transform = np.asarray(transform, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or matrix.shape != (3, 3) or transform.shape != (4, 4):
+        raise ValueError("expected Nx3 points, 3x3 intrinsics and 4x4 transform")
+    if width <= 0 or height <= 0 or not np.isfinite(matrix).all() or not np.isfinite(transform).all():
+        raise ValueError("invalid calibration or image dimensions")
+    if model not in (None, 'pinhole', 'equidistant'):
+        raise ValueError(f"unsupported distortion model: {model}")
+    camera = np.c_[points, np.ones(len(points))] @ transform.T
+    indices = np.flatnonzero(np.isfinite(camera).all(axis=1) & (camera[:, 2] > 0))
+    visible = camera[indices, :3]
+    if model == 'equidistant':
+        import cv2
+        distortion = np.asarray(coefficients, dtype=np.float64)
+        if distortion.size != 4 or not np.isfinite(distortion).all():
+            raise ValueError("equidistant requires four finite distortion coefficients")
+        projected = cv2.fisheye.projectPoints(visible.reshape(1, -1, 3), np.zeros(3), np.zeros(3),
+                                            matrix, distortion.reshape(4, 1))[0].reshape(-1, 2) if len(visible) else np.empty((0, 2))
+    else:
+        projected = visible @ matrix.T
+        projected = projected[:, :2] / projected[:, 2:3]
+    finite = np.isfinite(projected).all(axis=1)
+    indices, projected = indices[finite], projected[finite]
+    rounded = np.rint(projected)
+    inside = (rounded[:, 0] >= 0) & (rounded[:, 0] < width) & (rounded[:, 1] >= 0) & (rounded[:, 1] < height)
+    pixels, selected = rounded[inside].astype(np.int32), indices[inside]
+    return pixels, selected, {'input_points': len(points), 'points_in_front': len(visible),
+                              'points_in_image': len(pixels), 'points_rejected': len(points) - len(pixels)}

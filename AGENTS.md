@@ -2,7 +2,7 @@
 
 ## Source of truth
 
-Use the implementation in `src/data_collect_dag/`, the committed demo YAML files and `pyproject.toml` as the authority for documented behavior. Document implemented interfaces and executable examples. Keep design proposals, local datasets and historical migration discussions out of maintained documentation.
+Use the implementation in `src/data_collect_dag/` and `tools/lib/`, the committed demo YAML files and `pyproject.toml` as the authority for documented behavior. Document implemented interfaces and executable examples. Keep design proposals, local datasets and historical migration discussions out of maintained documentation.
 
 ## Layout
 
@@ -18,6 +18,8 @@ Use the implementation in `src/data_collect_dag/`, the committed demo YAML files
 - `src/data_collect_dag/config_templates.py`, `setup.py`, `MANIFEST.in`: template export and bundled resources.
 - `tests/unit/`, `tests/functional/`: pytest coverage.
 - `README.md`: installation and CLI usage. `docs/architecture.md`: runtime/config reference. `docs/ros_external_system_architecture.md`: ROS control contract.
+- `tools/toolkit.py`, `tools/lib/`: repository-only toolkit dispatch and shared implementations; `tools/lib/viewer.html`: offline viewer template. Existing scripts delegate to these implementations. `tools/README.md`: tool contracts and workflows.
+- `tests/helpers.py`: shared minimal configurations and bounded process helpers. Configuration error cases are data in `tests/unit/config_cases.py`; `tests/unit/test_toolkit.py` exercises offline tool workflows.
 
 ## Development and tests
 
@@ -36,11 +38,17 @@ source /opt/ros/noetic/setup.bash
 PYTHONPATH=src DCD_TEST_REAL_ROS=1 /usr/bin/python3 -m pytest tests/functional/test_ros_cli_integration.py -q
 ```
 
+Python 3.8 environments such as `dcd` may run the same suites when dependencies are available; real TCPROS tests also need system ROS Python dependencies such as `netifaces`. Keep thread-test assertions in the test thread, propagate background exceptions, and use bounded shutdown/join cleanup. Prefer focused unit cases plus representative real ROS scenarios over a full Cartesian product of subprocess tests.
+
 The base installation must not install or import torch, torchvision, Ultralytics or ONNX. `demo/cfg.yaml` supplies non-inference `init`, `fps`, `fps_undist`, `fps_undist_nomotion` and `compare_motion` pipelines; `fps_with_yolo` requires the YOLO extra and `demo/models/yolo26m.pt`. `fps_undist_nomotion` saves original images and statically transformed lidar clouds; its precheck covers the five cameras, five lidars and `/iccp_status` (`vcu_msgs/ICCPStatus`). All five collection pipelines use `speed_gate` before FPS control to skip frames below an absolute speed of 0.01 m/s or without valid status within 500 ms; `init` prechecks the status topic and still synchronizes at zero speed. The demo selects SA4 calibration. Installation modes and pip extras are `base`, `yolo`, `yolo-arm`, `dev` and `yolo-dev`; `dev` adds only pytest. Jetson YOLO installations use `bash setup.bash yolo-arm` with compatible wheels in `~/wheels` and Python 3.8 on `PATH` as `python`. Resolve both wheels before uninstalling packages, install them with `--no-deps`, and constrain subsequent dependency resolution to those local files. Do not download remote torch or torchvision wheels as a fallback. The `yolo-arm` extra pins `psutil==6.1.1`; pass `--no-binary=psutil` in the final pip install to compile it alongside the YOLO dependencies. Source builds require a C compiler and Python development headers. Remote pip installs must explicitly supply both local wheel paths and `--no-binary=psutil`; extras do not scan the wheel directory or enforce source builds.
 
 `run launch`, `inspect` and `clean` require `--config`; `clean` also requires `--keep-days N`. `run launch` creates a process and defaults to pipeline `init`; `run start NAME` controls an existing process and fails when none is available. Bare `run` prints group help and returns 0. The other pipeline controls are `run pause`, `run resume` and `run stop`; `status` and `shutdown` stay at the root. Control commands require no collection config. The four pipeline controls and `shutdown` accept `--control-topic` and `--timeout`; `status` accepts `--status-topic` and `--timeout`, with existing topics and a five-second timeout by default. One fully resolved ROS node name permits one local instance, including while `IDLE`; each instance permits one active pipeline. Acquire the lock before runtime construction, retain it through foreground/background execution and pass its descriptor to a background child using `python -m data_collect_dag run launch`. Close descriptors without explicitly unlocking the shared file description or deleting the lock file. Validate the requested pipeline name before stopping the active session. Keep control commands on the existing ROS topics and status protocol.
 
 `init DIR [--car-id CAR_ID] [--force]` exports templates offline. Car IDs are case-insensitive; omission exports all calibrations with SA4 selected. Calibration and demo model references are absolute. Preserve unrelated files, other calibrations and weights during export, and keep packaging checks consistent with templates. Place arguments after the leaf command. `--background` and the mutually exclusive hidden `--instance-lock-fd` apply only to `run launch`; `--pipeline` applies only to `run launch` and `inspect`. `inspect` reuses full static validation without importing runtime/node implementations or checking external resources.
+
+ROS lifecycle shutdown notifications enter the same standard-library command queue as control commands. Startup must not start a pipeline after ROS shutdown. Session setup failure and normal stopping share resource release, while preserving their different summary/error semantics. Keep `recent_session_status` as the most recently ended session's result across later starts; `RUNNING` with a prior `STOPPED` is valid.
+
+The toolkit remains repository-only; do not add installed entry points or inference dependencies to the base package for it. Root/group help must stay lightweight, and command help must not load optional ROS, Plotly, Open3D or Ultralytics packages. Dataset exports use hard links only, never silent copies; dry runs perform indexing/preflight without output creation. Preserve the two existing YOLO resolution presets. Offline HTML embeds local Plotly. Calibration output, existing script arguments and the collection status protocol remain compatible; complete tool behavior is documented in `tools/README.md`.
 
 ## Code and review conventions
 

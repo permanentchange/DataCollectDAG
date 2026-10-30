@@ -1,6 +1,9 @@
 """Opt-in ROS1 Noetic test using an isolated local master and real TCPROS."""
 
+from contextlib import contextmanager
+import json
 import os
+from http.client import RemoteDisconnected
 from pathlib import Path
 import re
 import shutil
@@ -16,6 +19,7 @@ import pytest
 import yaml
 
 from data_collect_dag.ros_env import ROS_PYTHON_PATH
+from tests.helpers import minimal_config, write_config as write_payload, process_alive, wait_until, terminate_process
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(
@@ -77,78 +81,160 @@ def wait_status(env, state, pipeline=None, error=None):
 @pytest.mark.parametrize("background", [False, True])
 def test_real_ros_cli_lifecycle_locking_and_timeouts(tmp_path, ros_env, background):
     name = "/vehicle/ros_cli_test_" + uuid.uuid4().hex
-    calibration = tmp_path / "calibration.json"
-    calibration.write_text('{"images": {}, "pointclouds": {}}')
-    pipeline = {"main_source": "camera", "nodes": [{"node_id": "start", "type": "start"},
-                {"node_id": "end", "type": "end"}], "edges": [["start", "end"]]}
-    config = tmp_path / "cfg.yaml"
-    config.write_text(yaml.safe_dump({
-        "ros": {"node_name": name, "control": {"control_topic": "/data_collect/control",
-                 "status_topic": "/data_collect/status"}, "topics": {
-                 "camera": {"topic": "/test_camera", "msg_type": "sensor_msgs/Image", "role": "image"}}},
-        "calibration": {"path": str(calibration)}, "output": {"root_dir": str(tmp_path / "output")},
-        "cache": {"defaults_by_role": {"image": {"max_frames": 2, "max_age_sec": 1}}},
-        "pipelines": {"init": pipeline, "fps": pipeline},
-    }))
-    args = ["run", "launch", "--config", str(config)] + (["--background"] if background else [])
-    with (tmp_path / "collector.log").open("w") as log:
-        process = subprocess.Popen([sys.executable, "-m", "data_collect_dag", *args], env=ros_env,
-                                   stdout=log, stderr=log, start_new_session=True)
-        pid = process.pid
-        try:
-            if background:
-                assert process.wait(timeout=10) == 0
-                pid = int(re.search(r"PID=(\d+)", (tmp_path / "collector.log").read_text()).group(1))
-            wait_status(ros_env, "RUNNING", "init")
-            # Check that the guarded full YAML name is the actual ROS node.
-            with ServerProxy(ros_env["ROS_MASTER_URI"]) as proxy:
-                assert proxy.lookupNode("/integration_test", name)[0] == 1
-            assert cli(ros_env, "run", "start", "fps").returncode == 0
-            active = wait_status(ros_env, "RUNNING", "fps")
-            session_id = re.search(r"Session:\s+(\S+)", active).group(1)
-            assert cli(ros_env, "run", "pause").returncode == 0
-            wait_status(ros_env, "PAUSED", "fps")
-            assert cli(ros_env, "run", "resume").returncode == 0
-            wait_status(ros_env, "RUNNING", "fps")
-            # Sending a valid control message is distinct from successful execution.
-            assert cli(ros_env, "run", "start", "missing").returncode == 0
-            active = wait_status(ros_env, "RUNNING", "fps", "unknown pipeline: missing")
-            assert session_id in active
-            assert cli(ros_env, "run", "stop").returncode == 0
-            wait_status(ros_env, "IDLE")
-            for duplicate_background in (False, True):
-                duplicate = cli(ros_env, "run", "launch", "--config", str(config), *(["--background"] if duplicate_background else []))
-                assert duplicate.returncode == 1 and "is already running" in duplicate.stderr
-            missing = cli(ros_env, "run", "pause", "--control-topic", "/absent/control", "--timeout", "0.2")
-            assert missing.returncode == 1 and "no collection control subscriber" in missing.stderr
-            assert cli(ros_env, "run", "start", "fps").returncode == 0
-            restarted = wait_status(ros_env, "RUNNING", "fps")
-            assert session_id not in restarted
-            assert cli(ros_env, "shutdown").returncode == 0
+    config = write_config(tmp_path, name)
+    with (tmp_path / "collector.log").open("w") as log, collector(ros_env, config, background, log) as (process, pid):
+        wait_status(ros_env, "RUNNING", "init")
+        # Check that the guarded full YAML name is the actual ROS node.
+        with ServerProxy(ros_env["ROS_MASTER_URI"]) as proxy:
+            assert proxy.lookupNode("/integration_test", name)[0] == 1
+        assert cli(ros_env, "run", "start", "fps").returncode == 0
+        active = wait_status(ros_env, "RUNNING", "fps")
+        session_id = re.search(r"Session:\s+(\S+)", active).group(1)
+        assert cli(ros_env, "run", "pause").returncode == 0
+        wait_status(ros_env, "PAUSED", "fps")
+        assert cli(ros_env, "run", "resume").returncode == 0
+        wait_status(ros_env, "RUNNING", "fps")
+        # Sending a valid control message is distinct from successful execution.
+        assert cli(ros_env, "run", "start", "missing").returncode == 0
+        active = wait_status(ros_env, "RUNNING", "fps", "unknown pipeline: missing")
+        assert session_id in active
+        assert cli(ros_env, "run", "stop").returncode == 0
+        wait_status(ros_env, "IDLE")
+        for duplicate_background in (False, True):
+            duplicate = cli(ros_env, "run", "launch", "--config", str(config), *(["--background"] if duplicate_background else []))
+            assert duplicate.returncode == 1 and "is already running" in duplicate.stderr
+        missing = cli(ros_env, "run", "pause", "--control-topic", "/absent/control", "--timeout", "0.2")
+        assert missing.returncode == 1 and "no collection control subscriber" in missing.stderr
+        assert cli(ros_env, "run", "start", "fps").returncode == 0
+        restarted = wait_status(ros_env, "RUNNING", "fps")
+        assert session_id not in restarted
+        assert cli(ros_env, "shutdown").returncode == 0
+        wait_status_gone = cli(ros_env, "status", "--timeout", "1")
+        # Allow a last latched snapshot during shutdown; the next query must fail.
+        if wait_status_gone.returncode == 0:
+            time.sleep(0.3)
             wait_status_gone = cli(ros_env, "status", "--timeout", "1")
-            # Allow a last latched snapshot during shutdown; the next query must fail.
-            if wait_status_gone.returncode == 0:
-                time.sleep(0.3)
-                wait_status_gone = cli(ros_env, "status", "--timeout", "1")
-            assert wait_status_gone.returncode == 1
-            missing = cli(ros_env, "run", "start", "fps", "--timeout", "0.2")
-            assert missing.returncode == 1 and "no collection control subscriber" in missing.stderr
-            if not background:
-                assert process.wait(timeout=5) == 0
-            from data_collect_dag.instance_guard import InstanceGuard
+        assert wait_status_gone.returncode == 1
+        missing = cli(ros_env, "run", "start", "fps", "--timeout", "0.2")
+        assert missing.returncode == 1 and "no collection control subscriber" in missing.stderr
+        if not background:
+            assert process.wait(timeout=5) == 0
+        from data_collect_dag.instance_guard import InstanceGuard
+        with InstanceGuard(name):
+            pass
+
+
+def write_config(tmp_path, name):
+    raw = minimal_config(tmp_path)
+    raw["ros"].update({"node_name": name, "control": {
+        "control_topic": "/data_collect/control", "status_topic": "/data_collect/status",
+    }})
+    raw["pipelines"]["fps"] = raw["pipelines"]["init"]
+    return write_payload(tmp_path, raw)
+
+
+def wait_process_exit(process, pid):
+    wait_until(lambda: not process_alive(pid), 10, f"collector PID {pid} did not exit")
+    assert process.wait(timeout=5) == 0
+
+
+def terminate_collector(process, pid):
+    try:
+        terminate_process(pid)
+    finally:
+        process.wait(timeout=5)
+
+
+@contextmanager
+def collector(env, config, background, log):
+    args = ["run", "launch", "--config", str(config)] + (["--background"] if background else [])
+    process = subprocess.Popen([sys.executable, "-m", "data_collect_dag", *args], env=env,
+                               stdout=log, stderr=log, start_new_session=True)
+    pid = process.pid
+    try:
+        if background:
+            assert process.wait(timeout=10) == 0
+            pid = int(re.search(r"PID=(\d+)", Path(log.name).read_text()).group(1))
+        yield process, pid
+    finally:
+        terminate_collector(process, pid)
+
+
+@pytest.mark.parametrize("trigger,idle,background,restart", [
+    pytest.param("node_shutdown", False, False, True, id="ros-running-foreground"),
+    pytest.param("node_shutdown", True, True, False, id="ros-idle-background"),
+    pytest.param("same_name", False, True, True, id="replacement-running-background"),
+    pytest.param("same_name", True, False, False, id="replacement-idle-foreground"),
+    pytest.param("sigint", False, False, False, id="sigint-running-foreground"),
+    pytest.param("sigterm", False, True, False, id="sigterm-running-background"),
+])
+def test_real_ros_external_shutdown_releases_process_and_lock(tmp_path, ros_env, trigger, idle, background, restart):
+    from data_collect_dag.instance_guard import InstanceGuard
+
+    name = "/vehicle/shutdown_test_" + uuid.uuid4().hex
+    config = write_config(tmp_path, name)
+    replacement = None
+    with (tmp_path / "collector.log").open("w") as log, collector(ros_env, config, background, log) as (process, pid):
+        try:
+            active = wait_status(ros_env, "RUNNING", "init")
+            session_id = re.search(r"Session:\s+(\S+)", active).group(1)
+            summary_path = tmp_path / "output" / session_id / "session_summary.json"
+            if idle:
+                assert cli(ros_env, "run", "stop").returncode == 0
+                wait_status(ros_env, "IDLE")
+                previous_summary = summary_path.read_bytes()
+
+            if trigger == "node_shutdown":
+                with ServerProxy(ros_env["ROS_MASTER_URI"]) as master:
+                    code, message, uri = master.lookupNode("/integration_test", name)
+                    assert code == 1, message
+                with ServerProxy(uri) as node:
+                    try:
+                        assert node.shutdown("/integration_test", "external shutdown test")[0] == 1
+                    except (ConnectionRefusedError, RemoteDisconnected):
+                        # The process can finish cleanup before XML-RPC replies
+                        # (or before ServerProxy retries a dropped response).
+                        # Exit, lock release and summary below prove delivery.
+                        pass
+            elif trigger == "same_name":
+                # A plain rospy process bypasses the host-local instance guard,
+                # just as a node started on another host would.
+                code = ("import rospy, sys; "
+                        "rospy.init_node('replacement', argv=['replacement', '__name:=' + sys.argv[1]]); "
+                        "rospy.spin()")
+                replacement = subprocess.Popen([sys.executable, "-c", code, name], env=ros_env,
+                                               stdout=log, stderr=log, start_new_session=True)
+            else:
+                os.kill(pid, signal.SIGINT if trigger == "sigint" else signal.SIGTERM)
+
+            wait_process_exit(process, pid)
             with InstanceGuard(name):
                 pass
-        finally:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            if process.poll() is None:
+            if idle:
+                assert summary_path.read_bytes() == previous_summary
+            else:
+                summary = json.loads(summary_path.read_text())
+                assert summary["end_status"] == "STOPPED"
+                expected = {"sigint": "signal_2", "sigterm": "signal_15"}.get(trigger, "ros_shutdown")
+                assert summary["end_reason"] == expected
+
+            if replacement is not None:
+                assert replacement.poll() is None
+                terminate_collector(replacement, replacement.pid)
+                replacement = None
+            if restart:
+                restarted = subprocess.Popen([sys.executable, "-m", "data_collect_dag", "run", "launch",
+                                              "--config", str(config)], env=ros_env, stdout=log, stderr=log)
                 try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+                    current = wait_status(ros_env, "RUNNING", "init")
+                    assert session_id not in current
+                    assert cli(ros_env, "shutdown").returncode == 0
+                    assert restarted.wait(timeout=10) == 0
+                finally:
+                    terminate_collector(restarted, restarted.pid)
+        finally:
+            if replacement is not None:
+                terminate_collector(replacement, replacement.pid)
 
 
 def test_real_unavailable_master_has_nonzero_bounded_exit(tmp_path):

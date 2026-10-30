@@ -6,7 +6,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
-import yaml
+from tests.helpers import minimal_config, write_config, wait_until
 
 from data_collect_dag.app import AppRuntime
 from data_collect_dag.cli import main
@@ -17,31 +17,13 @@ from data_collect_dag.node_registry import load_node_type
 from data_collect_dag.storage import tracked_write
 
 
-def _wait(predicate):
-    deadline = time.monotonic() + 3
-    while not predicate():
-        assert time.monotonic() < deadline, "timed out waiting for storage control"
-        time.sleep(0.005)
-
-
 @pytest.fixture
 def runtime(tmp_path):
-    calibration = tmp_path / "calibration.json"
-    calibration.write_text('{"images": {}, "pointclouds": {}}')
-    payload = {
-        "output": {"root_dir": str(tmp_path / "output"), "disk_storage_limit_GB": 0.001},
-        "calibration": {"path": str(calibration)},
-        "ros": {"topics": {"camera": {"topic": "/camera", "msg_type": "sensor_msgs/Image", "role": "image"}}},
-        "cache": {"defaults_by_role": {"image": {"max_frames": 10, "max_age_sec": 1}}},
-        "runtime": {"sample_workers": 2, "node_workers": 2},
-        "pipelines": {"test": {
-            "main_source": "camera",
-            "nodes": [{"node_id": "start", "type": "start"}, {"node_id": "end", "type": "end"}],
-            "edges": [["start", "end"]],
-        }},
-    }
-    path = tmp_path / "config.yaml"
-    path.write_text(yaml.safe_dump(payload))
+    payload = minimal_config(tmp_path)
+    payload["output"]["disk_storage_limit_GB"] = 0.001
+    payload["runtime"] = {"sample_workers": 2, "node_workers": 2}
+    payload["pipelines"]["test"] = payload["pipelines"].pop("init")
+    path = write_config(tmp_path, payload)
     app = AppRuntime(path, "test")
     app._control_thread.start()
     try:
@@ -54,7 +36,7 @@ def runtime(tmp_path):
 
 def _start(runtime):
     runtime._handle_start_command("test")
-    _wait(lambda: runtime.session_manager.active_session is not None)
+    wait_until(lambda: runtime.session_manager.active_session is not None)
     return runtime.session_manager.active_session
 
 
@@ -80,7 +62,7 @@ def test_start_refused_before_creating_session_and_can_recover(runtime):
     old = root / "unrelated.dat"
     old.write_bytes(b"x" * 1_000_000)
     runtime._handle_start_command("test")
-    _wait(lambda: runtime.status_manager.snapshot().last_error is not None)
+    wait_until(lambda: runtime.status_manager.snapshot().last_error is not None)
     snapshot = runtime.status_manager.snapshot()
     assert snapshot.tool_state.value == "IDLE"
     assert snapshot.recent_session_status.value == "FAILED"
@@ -105,7 +87,7 @@ def test_free_space_checked_once_per_start_and_not_resume(runtime, monkeypatch):
     monkeypatch.setattr("data_collect_dag.storage.shutil.disk_usage", disk_usage)
     runtime.app_config.disk_storage_need_gb = 1
     runtime._handle_start_command("test")
-    _wait(lambda: runtime.status_manager.snapshot().last_error is not None)
+    wait_until(lambda: runtime.status_manager.snapshot().last_error is not None)
     assert "insufficient_disk_space" in runtime.status_manager.snapshot().last_error
     assert not runtime.app_config.output_root_dir.exists()
     available[0] = 1_000_000_000
@@ -160,7 +142,7 @@ def test_limit_drains_two_inflight_samples_and_stops_queued_sample(runtime, monk
         session.accept_frame("camera", frame(4))
         assert session.metrics.metrics.samples_started == 2
         finish.set()
-        _wait(lambda: runtime.session_manager.active_session is None)
+        wait_until(lambda: runtime.session_manager.active_session is None)
         assert len(complete_commands) == 1
         assert complete_commands[0].session_id == session.session_id
         summary = json.loads((session.session_root / "session_summary.json").read_text())
@@ -199,7 +181,7 @@ def test_background_monitor_stops_without_incoming_frames(runtime, monkeypatch, 
             path = runtime.app_config.output_root_dir / name
         path.write_bytes(b"x" * 1_000_000)
         expected_reason = "storage_limit_reached"
-    _wait(lambda: runtime.session_manager.active_session is None)
+    wait_until(lambda: runtime.session_manager.active_session is None)
     snapshot = runtime.status_manager.snapshot()
     assert snapshot.recent_session_status.value == "FAILED"
     assert expected_reason in snapshot.last_error
@@ -214,7 +196,7 @@ def test_background_log_is_monitored_without_directory_scan(runtime, monkeypatch
         raise AssertionError("log limit must be detected without a directory scan")
     monkeypatch.setattr("data_collect_dag.storage.scan_files", no_scan)
     (runtime.app_config.output_root_dir / "background.log").write_bytes(b"x" * 1_000_000)
-    _wait(lambda: runtime.session_manager.active_session is None)
+    wait_until(lambda: runtime.session_manager.active_session is None)
     assert "storage_limit_reached" in runtime.status_manager.snapshot().last_error
 
 
@@ -238,6 +220,6 @@ def test_ros_shutdown_stops_entire_runtime_and_writes_summary(runtime, state):
 def test_ros_stop_keeps_runtime_available_for_restart(runtime):
     first = _start(runtime)
     runtime.ros_adapter._on_control_topic(SimpleNamespace(data='{"command":"stop"}'))
-    _wait(lambda: runtime.session_manager.active_session is None)
+    wait_until(lambda: runtime.session_manager.active_session is None)
     assert runtime._control_thread.is_alive() and not runtime._stop_event.is_set()
     assert _start(runtime).session_id != first.session_id

@@ -8,6 +8,8 @@ import sys
 import pytest
 import yaml
 
+from tests.unit.config_cases import CLI_ERRORS
+
 from data_collect_dag import __version__
 from data_collect_dag.cli import main
 from data_collect_dag.config import ConfigError, load_app_config
@@ -76,47 +78,11 @@ def test_inspect_demo_displays_speed_gate(monkeypatch, capsys):
         assert expected in output
 
 
-@pytest.mark.parametrize("case,error", [
-    ("section", "ros must be a mapping"), ("topic_field", "ros.topics.camera.msg_type"),
-    ("runtime_number", "runtime.node_workers"), ("cache_number", "cache.camera.max_frames"),
-    ("nodes_shape", "pipelines.custom.nodes must be a list"),
-    ("node_field", "pipelines.custom.nodes[0].type"), ("edges_shape", "pipelines.custom.edges[0]"),
-    ("unknown_type", "unknown node type"), ("duplicate", "duplicate node_id"),
-    ("source", "main_source not found"), ("node_source", "unknown source"),
-    ("edge_reference", "edge references unknown node"), ("cycle", "contains a cycle"),
-    ("start", "exactly one start"), ("end", "exactly one end"),
-    ("unreachable", "unreachable from start"), ("dead_end", "cannot reach end"),
-    ("description", "description must be a string"),
-])
-def test_contextual_static_errors(config_file, case, error, monkeypatch, capsys):
+@pytest.mark.parametrize("overrides,error", CLI_ERRORS)
+def test_inspect_reports_validation_errors(config_file, overrides, error, monkeypatch, capsys):
     path, raw = config_file
-    pipeline = raw["pipelines"]["custom"]
-    if case == "section": raw["ros"] = []
-    elif case == "topic_field": del raw["ros"]["topics"]["camera"]["msg_type"]
-    elif case == "runtime_number": raw["runtime"] = {"node_workers": "bad"}
-    elif case == "cache_number": raw["cache"]["defaults_by_role"]["image"]["max_frames"] = "bad"
-    elif case == "nodes_shape": pipeline["nodes"] = {}
-    elif case == "node_field": del pipeline["nodes"][0]["type"]
-    elif case == "edges_shape": pipeline["edges"] = [["begin"]]
-    elif case == "unknown_type": pipeline["nodes"][0]["type"] = "typo"
-    elif case == "duplicate": pipeline["nodes"].append(copy.deepcopy(pipeline["nodes"][0]))
-    elif case == "source": pipeline["main_source"] = "missing"
-    elif case == "node_source":
-        pipeline["nodes"].append({"node_id": "sync", "type": "time_sync", "config": {"source": "missing"}})
-    elif case == "edge_reference": pipeline["edges"].append(["begin", "missing"])
-    elif case == "cycle": pipeline["edges"].append(["finish", "begin"])
-    elif case == "start": pipeline["nodes"][0]["type"] = "time_sync"
-    elif case == "end": pipeline["nodes"][1]["type"] = "time_sync"
-    elif case in ("unreachable", "dead_end"):
-        pipeline["nodes"].append({"node_id": "extra", "type": "aggregate_pointclouds"})
-        if case == "dead_end": pipeline["edges"].append(["begin", "extra"])
-    elif case == "description": pipeline["description"] = []
-    # Use a known parameter-free type for missing start/end checks.
-    if case in ("start", "end"):
-        pipeline["nodes"][0 if case == "start" else 1]["type"] = "aggregate_pointclouds"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    with pytest.raises(ConfigError, match=error.replace("[", r"\[").replace("]", r"\]")):
-        load_app_config(path)
+    raw.update(copy.deepcopy(overrides))
+    path.write_text(yaml.safe_dump(raw))
     assert inspect(path, monkeypatch) == 1
     output = capsys.readouterr()
     assert not output.out and error in output.err

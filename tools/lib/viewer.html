@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Point Cloud Viewer</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f2f4f7;
+      --panel: rgba(255, 255, 255, 0.92);
+      --text: #16202a;
+      --muted: #5f6b7a;
+      --border: rgba(22, 32, 42, 0.12);
+      --shadow: 0 12px 32px rgba(19, 31, 45, 0.14);
+    }}
+    * {{
+      box-sizing: border-box;
+    }}
+    body {{
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(80, 154, 255, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(60, 196, 170, 0.18), transparent 24%),
+        var(--bg);
+      color: var(--text);
+    }}
+    .page {{
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) 1fr;
+      gap: 18px;
+      min-height: 100vh;
+      padding: 18px;
+    }}
+    .panel {{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }}
+    .sidebar {{
+      padding: 18px;
+    }}
+    .title {{
+      margin: 0 0 6px;
+      font-size: 24px;
+      line-height: 1.2;
+    }}
+    .subtitle {{
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+      word-break: break-all;
+    }}
+    .section {{
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+    }}
+    .section:first-of-type {{
+      margin-top: 0;
+      padding-top: 0;
+      border-top: none;
+    }}
+    .section h2 {{
+      margin: 0 0 12px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }}
+    .stats {{
+      display: grid;
+      gap: 10px;
+    }}
+    .stat {{
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(244, 247, 250, 0.88);
+    }}
+    .stat .label {{
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .stat .value {{
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }}
+    .picked {{
+      display: grid;
+      gap: 10px;
+    }}
+    .hint {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }}
+    .viewer {{
+      overflow: hidden;
+      min-height: calc(100vh - 36px);
+    }}
+    #plot {{
+      width: 100%;
+      height: calc(100vh - 36px);
+    }}
+    @media (max-width: 960px) {{
+      .page {{
+        grid-template-columns: 1fr;
+      }}
+      .viewer, #plot {{
+        min-height: 70vh;
+        height: 70vh;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <aside class="panel sidebar">
+      <h1 class="title">Point Cloud Viewer</h1>
+      <p class="subtitle">{input_name}</p>
+
+      <section class="section">
+        <h2>Overview</h2>
+        <div class="stats">
+          <div class="stat"><span class="label">Points</span><span class="value" id="point-count"></span></div>
+          <div class="stat"><span class="label">Color Mode</span><span class="value" id="color-mode"></span></div>
+          <div class="stat"><span class="label">Color Scale</span><span class="value" id="color-scale"></span></div>
+          <div class="stat"><span class="label">Point Size</span><span class="value" id="point-size"></span></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Selection</h2>
+        <div class="picked">
+          <p class="hint" id="selection-hint">左键点击一个点以查看真实坐标。左键拖拽旋转，滚轮缩放，右键拖拽平移。</p>
+          <div class="stat"><span class="label">Index</span><span class="value" id="picked-index">-</span></div>
+          <div class="stat"><span class="label">X</span><span class="value" id="picked-x">-</span></div>
+          <div class="stat"><span class="label">Y</span><span class="value" id="picked-y">-</span></div>
+          <div class="stat"><span class="label">Z</span><span class="value" id="picked-z">-</span></div>
+          <div class="stat"><span class="label">Distance</span><span class="value" id="picked-distance">-</span></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Bounds</h2>
+        <div class="stats">
+          <div class="stat"><span class="label">X Range</span><span class="value" id="x-range"></span></div>
+          <div class="stat"><span class="label">Y Range</span><span class="value" id="y-range"></span></div>
+          <div class="stat"><span class="label">Z Range</span><span class="value" id="z-range"></span></div>
+        </div>
+      </section>
+    </aside>
+    <main class="panel viewer">
+      <div id="plot"></div>
+    </main>
+  </div>
+
+  <script>
+    const cloud = {cloud_json};
+    const meta = {meta_json};
+
+    document.getElementById("point-count").textContent = `${{meta.point_count}} displayed / ${{meta.filtered_count}} filtered / ${{meta.input_count}} input`;
+    document.getElementById("color-mode").textContent = meta.color_mode;
+    document.getElementById("color-scale").textContent = meta.colorscale;
+    document.getElementById("point-size").textContent = String(meta.size);
+    document.getElementById("x-range").textContent = `${{meta.xmin.toFixed(6)}} to ${{meta.xmax.toFixed(6)}}`;
+    document.getElementById("y-range").textContent = `${{meta.ymin.toFixed(6)}} to ${{meta.ymax.toFixed(6)}}`;
+    document.getElementById("z-range").textContent = `${{meta.zmin.toFixed(6)}} to ${{meta.zmax.toFixed(6)}}`;
+
+    const trace = {{
+      type: "scatter3d",
+      mode: "markers",
+      x: cloud.x,
+      y: cloud.y,
+      z: cloud.z,
+      customdata: cloud.distance.map((distance, index) => [index, distance]),
+      hovertemplate:
+        "x=%{{x:.6f}}<br>" +
+        "y=%{{y:.6f}}<br>" +
+        "z=%{{z:.6f}}<br>" +
+        "distance=%{{customdata[1]:.6f}}<extra></extra>",
+      marker: {{
+        size: meta.size,
+        color: cloud.color,
+        colorscale: meta.colorscale,
+        opacity: 0.95,
+        colorbar: {{
+          title: meta.color_mode
+        }}
+      }}
+    }};
+
+    const layout = {{
+      margin: {{ l: 0, r: 0, t: 0, b: 0 }},
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+      showlegend: false,
+      dragmode: "orbit",
+      scene: {{
+        aspectmode: "data",
+        xaxis: {{ title: "X" }},
+        yaxis: {{ title: "Y" }},
+        zaxis: {{ title: "Z" }},
+        camera: {{
+          center: {{ x: 0, y: 0, z: 0 }},
+          eye: {{
+            x: 1.6,
+            y: 1.6,
+            z: 0.9
+          }}
+        }}
+      }}
+    }};
+
+    const config = {{
+      responsive: true,
+      scrollZoom: true,
+      displaylogo: false,
+      modeBarButtonsToAdd: ["orbitRotation", "tableRotation", "resetCameraDefault3d", "resetCameraLastSave3d"],
+      toImageButtonOptions: {{
+        filename: meta.output_name.replace(/\\.html$/i, "")
+      }}
+    }};
+
+    const plotDiv = document.getElementById("plot");
+    Plotly.newPlot(plotDiv, [trace], layout, config);
+
+    plotDiv.on("plotly_click", (eventData) => {{
+      if (!eventData || !eventData.points || !eventData.points.length) {{
+        return;
+      }}
+      const point = eventData.points[0];
+      document.getElementById("selection-hint").textContent = "已选中一个点。继续左键点击其他点可更新坐标。";
+      document.getElementById("picked-index").textContent = String(point.customdata[0]);
+      document.getElementById("picked-x").textContent = Number(point.x).toFixed(6);
+      document.getElementById("picked-y").textContent = Number(point.y).toFixed(6);
+      document.getElementById("picked-z").textContent = Number(point.z).toFixed(6);
+      document.getElementById("picked-distance").textContent = Number(point.customdata[1]).toFixed(6);
+    }});
+  </script>
+</body>
+</html>

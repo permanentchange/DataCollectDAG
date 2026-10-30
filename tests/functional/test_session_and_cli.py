@@ -1,9 +1,7 @@
 import json
-import threading
-import time
 
 import pytest
-import yaml
+from tests.helpers import minimal_config, write_config, wait_until
 
 from data_collect_dag.app import AppRuntime
 from data_collect_dag.control import ControlCommand
@@ -11,20 +9,10 @@ from data_collect_dag.control import ControlCommand
 
 @pytest.fixture
 def runtime(tmp_path):
-    calibration = tmp_path / "calibration.json"
-    calibration.write_text('{"images": {}, "pointclouds": {}}')
-    pipeline = {
-        "main_source": "camera",
-        "nodes": [{"node_id": "start", "type": "start"}, {"node_id": "end", "type": "end"}],
-        "edges": [["start", "end"]],
-    }
-    config = tmp_path / "cfg.yaml"
-    config.write_text(yaml.safe_dump({
-        "calibration": {"path": str(calibration)}, "output": {"root_dir": str(tmp_path / "output")},
-        "ros": {"topics": {"camera": {"topic": "/camera", "msg_type": "sensor_msgs/Image", "role": "image"}}},
-        "cache": {"defaults_by_role": {"image": {"max_frames": 2, "max_age_sec": 1}}},
-        "pipelines": {"fps": pipeline, "other": pipeline},
-    }))
+    payload = minimal_config(tmp_path)
+    pipeline = payload["pipelines"].pop("init")
+    payload["pipelines"] = {"fps": pipeline, "other": pipeline}
+    config = write_config(tmp_path, payload)
     app = AppRuntime(config, "fps")
     try:
         yield app
@@ -55,9 +43,7 @@ def test_unknown_pipeline_start_preserves_active_session(runtime):
     before = runtime.status_manager.snapshot()
     runtime._control_thread.start()
     runtime._submit_command(ControlCommand(kind="start", pipeline_name="missing"))
-    deadline = time.monotonic() + 1.0
-    while runtime.status_manager.snapshot().last_error is None and time.monotonic() < deadline:
-        time.sleep(0.01)
+    wait_until(lambda: runtime.status_manager.snapshot().last_error is not None)
 
     snapshot = runtime.status_manager.snapshot()
     assert snapshot.tool_state.value == "RUNNING"

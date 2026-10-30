@@ -86,6 +86,8 @@ rostopic pub -1 /data_collect/control std_msgs/String "data: '{\"command\":\"sta
 
 `shutdown` 停止活动 session、保存摘要并退出整个程序。SIGINT/SIGTERM 通过同一控制队列收尾。正常收尾的摘要为 `STOPPED`，`end_reason` 分别为 `external_shutdown` 或 `signal_<信号编号>`；无活动 session 时直接退出。停止过程的节点线程池等待已提交任务，`runtime.stop_timeout_sec` 用于部分线程等待，并非整个退出流程的总时限。收尾失败记录 `FAILED` 和具体错误。退出后停止发布 status。
 
+外部 ROS 关闭请求（包括 `rosnode kill` 或其他主机向同一 Master 注册同名节点）也通过控制队列收尾退出，活动 session 正常收尾时记为 `STOPPED`，`end_reason` 为 `ros_shutdown`。程序退出后释放本机实例锁，允许重新启动。ROS 在启动阶段已关闭时不启动初始 pipeline。该行为不包含 Master 失联检测或自动重连。
+
 ## 状态消息
 
 `status_topic` 每约 **0.5 秒** 发布一次，`latch=True`；可通过以下命令订阅：
@@ -140,6 +142,8 @@ rostopic echo /data_collect/status
 
 `RUNNING`、`PAUSED` 是活动状态；`STOPPED`、`COMPLETED`、`FAILED` 属于最近 session 的最终结果。状态切换至 `IDLE` 后，当前 session 的三个字段被清空，计数仍保留到下一次成功启动。成功启动重置计数和 `last_error`，但 `recent_session_status` 保留最近结束结果；不能据此字段单独判断当前是否运行。`start_time` 为 session 构造时的本机时间。状态 topic 会向新订阅者发送最近一条 latched 消息；不能单凭发布命令成功或一条缓存状态判断命令已执行，应等待活动状态/session id 变化并检查 `last_error`。
 
+例如，`tool_state: RUNNING` 与 `recent_session_status: STOPPED` 并存时，表示当前 session 正在运行，前一次结束的 session 被停止；不是当前 session 同时处于两种状态。该历史结果没有对应的历史 session id 字段，不能把它关联到 `current_session_id`。需要追溯某次采集结果时，读取对应目录中的 `session_summary.json`。CLI 的 `State` 只展示 `tool_state`。
+
 容量字段使用十进制 GB；`disk_free_gb` 和 `output_size_gb` 保留两位小数，配置门槛保留配置数值。`output_size_gb` 使用缓存，状态查询不扫描输出目录。容量检查规则见 [YAML 配置](architecture.md#2-yaml-配置)。
 
 容量拒绝启动时保持 `IDLE`，最近结果为 `FAILED`，不创建该会话目录。运行中达到容量上限或检查失败时，停止新样本并收尾，进入 `IDLE` / `FAILED`。错误使用 `storage_limit_reached`、`insufficient_disk_space` 或 `storage_check_failed` 标识；运行中失败的摘要也记录对应 `end_reason`。释放空间后可显式 `start` 重试。
@@ -153,6 +157,10 @@ rostopic echo /data_collect/status
 实例锁获取、YAML 解析、标定加载、Master 连接和 message class 解析发生在状态接口就绪之前；失败时启动进程返回非零，通过终端输出或后台日志诊断。后台父进程的零退出码及 PID 只表示子进程已创建。
 
 ROS 接口就绪后的 Pipeline 容量检查、topic 预检查和节点初始化错误通过 `last_error` 及进程日志报告；进程继续接受控制。`init`、`inspect` 和 `clean` 不启动 ROS 接口。
+
+## 配套诊断工具
+
+仓库的 `python tools/toolkit.py ros sync` 可读取 bag 或采样实时图像、点云时间戳；`ros record` 按配置记录 topic，默认包含 `/iccp_status`；`ros camera-reset` 管理指定相机节点。这些命令不向采集程序发送 pipeline 控制命令。输入、默认值、只读预演和输出格式见 [工具指南](../tools/README.md)。
 
 `inspect --config CFG [--pipeline NAME]` 只读取并静态校验整个配置，不查询运行实例，也不检查 topic 在线情况、消息包、标定/模型加载或 CUDA。查看当前实例使用 `status`；离线配置摘要及错误边界见 [配置检查](../README.md#inspect-configuration-offline)。
 

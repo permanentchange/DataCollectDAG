@@ -48,6 +48,9 @@ class RosAdapter:
         self._pause_callback: Optional[Callable[[], None]] = None
         self._resume_callback: Optional[Callable[[], None]] = None
         self._shutdown_callback: Optional[Callable[[], None]] = None
+        self._ros_shutdown_callback: Optional[Callable[[], None]] = None
+        self._ros_shutdown = threading.Event()
+        self._shutdown_hook_registered = False
         self._status_thread: Optional[threading.Thread] = None
         self._status_stop = threading.Event()
         self._subscribers = []
@@ -68,6 +71,7 @@ class RosAdapter:
         pause_callback: Callable[[], None],
         resume_callback: Callable[[], None],
         shutdown_callback: Optional[Callable[[], None]] = None,
+        ros_shutdown_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         self._status_callback = status_callback
         self._start_callback = start_callback
@@ -75,6 +79,7 @@ class RosAdapter:
         self._pause_callback = pause_callback
         self._resume_callback = resume_callback
         self._shutdown_callback = shutdown_callback
+        self._ros_shutdown_callback = ros_shutdown_callback
 
     def bind_session(self, session: Any) -> None:
         self._session = session
@@ -106,6 +111,14 @@ class RosAdapter:
             self._wait_for_ros_master()
             rospy = import_rospy()
         self._rospy = rospy
+        self._status_stop.clear()
+        if not self._shutdown_hook_registered:
+            # Register before init_node: ROS can close while it is registering.
+            rospy.on_shutdown(self._on_ros_shutdown)
+            self._shutdown_hook_registered = True
+        if self.is_shutdown():
+            self._on_ros_shutdown()
+            return
         if not rospy.core.is_initialized():
             self._wait_for_ros_master()
             node_name = resolve_node_name(self._ros_node_name)
@@ -113,6 +126,8 @@ class RosAdapter:
             # used by the instance lock, including an explicit YAML namespace.
             rospy.init_node(node_name.rsplit("/", 1)[-1], argv=[sys.argv[0], "__name:=" + node_name],
                             anonymous=False, disable_signals=True)
+        if self.is_shutdown():
+            return
         self._logger.info("starting ROS adapter node=%s subscribed_topics=%s", self._ros_node_name, sorted(self._topics))
         resolved_message_classes = self._resolve_topic_message_classes()
         self._subscribers = []
@@ -125,7 +140,6 @@ class RosAdapter:
             self._subscribers.append(rospy.Subscriber(self._control.control_topic, StringMsg, self._on_control_topic, queue_size=10))
         if self._control.status_topic:
             self._publishers["status_topic"] = rospy.Publisher(self._control.status_topic, StringMsg, queue_size=10, latch=True)
-            self._status_stop.clear()
             self._status_thread = threading.Thread(target=self._status_loop, name="ros-status-publisher", daemon=True)
             self._status_thread.start()
         if self._control.status_service:
@@ -137,6 +151,17 @@ class RosAdapter:
         if self._control.start_service:
             Trigger, TriggerResponse = import_std_srvs_trigger()
             self._services.append(rospy.Service(self._control.start_service, Trigger, self._handle_start_service))
+
+    def is_shutdown(self) -> bool:
+        return self._ros_shutdown.is_set() or (self._rospy is not None and self._rospy.is_shutdown())
+
+    def _on_ros_shutdown(self) -> None:
+        self._ros_shutdown.set()
+        self._status_stop.set()
+        # ROS invokes this hook before tearing down transports. Keep it short;
+        # the app's control thread owns session cleanup and thread joins.
+        if self._ros_shutdown_callback is not None:
+            self._ros_shutdown_callback()
 
     def stop(self) -> None:
         self._logger.info("stopping ROS adapter")
@@ -276,11 +301,17 @@ class RosAdapter:
         if "status_topic" not in self._publishers:
             return
         StringMsg = import_std_msgs_string()
-        while not self._status_stop.is_set():
+        publisher = self._publishers["status_topic"]
+        while not self._status_stop.is_set() and not self.is_shutdown():
             msg = StringMsg()
             snapshot = self._get_status_snapshot()
             msg.data = "{}" if snapshot is None else json.dumps(snapshot.to_dict(), ensure_ascii=False)
-            self._publishers["status_topic"].publish(msg)
+            try:
+                publisher.publish(msg)
+            except Exception:
+                if not self._status_stop.is_set() and not self.is_shutdown():
+                    self._logger.exception("failed to publish ROS status")
+                return
             if snapshot is not None:
                 self._maybe_log_runtime_summary(snapshot)
             self._status_stop.wait(0.5)

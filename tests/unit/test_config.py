@@ -1,9 +1,13 @@
+import copy
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
 from data_collect_dag.config import ConfigError, load_app_config
+from tests.helpers import minimal_config, write_config
+from tests.unit.config_cases import STRUCTURE_ERRORS, NODE_ERRORS, GRAPH_ERRORS, pipeline
 
 
 def test_load_demo_config():
@@ -370,3 +374,12 @@ def test_invalid_max_saved_samples_fails(tmp_path):
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     with pytest.raises(ConfigError, match="max_saved_samples"):
         load_app_config(path)
+
+
+@pytest.mark.parametrize("overrides,error", STRUCTURE_ERRORS + NODE_ERRORS + GRAPH_ERRORS)
+def test_contextual_static_errors(tmp_path, overrides, error):
+    raw = minimal_config(tmp_path)
+    raw.update(pipeline())
+    raw.update(copy.deepcopy(overrides))
+    with pytest.raises(ConfigError, match=re.escape(error)):
+        load_app_config(write_config(tmp_path, raw))

@@ -2,6 +2,8 @@
 
 本文对应当前 `src/data_collect_dag/` 实现。安装和 CLI 示例见 [README](../README.md)；ROS 控制消息格式见 [外部接口](ros_external_system_architecture.md)。
 
+仓库工具由独立入口 `python tools/toolkit.py` 调用，使用方式见 [工具指南](../tools/README.md)。工具共享实现位于 `tools/lib/`；不通过采集程序的控制队列执行。
+
 ## 1. 运行路径
 
 ```text
@@ -38,6 +40,12 @@
 `AppRuntime.run()` 启动 ROS adapter 和控制线程，然后提交一次 `start`，默认 pipeline 为 `init`。ROS 回调将命令放入队列，控制线程串行执行 session 操作。`start` 先验证名称，再停止活动 session 并构造新 session；名称不存在时保留活动 session、暂停状态及计数，并写入 `last_error`。名称有效但新 session 初始化失败时，原 session 已停止，工具进入 `IDLE` 并报告错误。
 
 `pause` 停止接收新帧及启动新样本；`resume` 恢复，活动时长不累计暂停时间。`stop` 结束 session，程序继续接受控制。`shutdown`、SIGINT 和 SIGTERM 通过控制队列收尾并退出整个程序。停止过程请求取消，等待工作线程和已提交的 DAG 任务，并写入会话索引及摘要。
+
+`RosAdapter` 在 ROS 初始化前注册 `rospy.on_shutdown()`，将外部 ROS 关闭通知转入同一控制队列，主循环也检查 ROS 关闭状态。`rosnode kill` 或其他主机向同一 Master 注册同名节点触发关闭后，程序停止活动 session（`end_reason: ros_shutdown`）并退出释放本机锁。关闭回调不等待 session 清理；启动期间收到关闭请求会跳过初始 pipeline，重复请求不会重复收尾。Master 失联检测及自动重连不在此流程内。
+
+命令使用标准库 `queue.Queue` 传递，控制线程串行执行。`SessionRuntime` 的启动失败和正常停止共用资源释放及摘要构造方法；取消、监控线程退出、解绑、工作线程等待、逆序节点 teardown 和线程池关闭保持同一执行顺序。单步清理失败继续执行后续步骤并聚合错误。启动失败的摘要原因保持 `setup_failed`；正常停止还写入保存样本索引，清理失败时记录 `FAILED` 及对应原因。
+
+状态中的 `tool_state` 表示当前工具状态，`recent_session_status` 保留最近结束的 session 结果，后续成功启动不会清空它；两者分别为 `RUNNING` 和 `STOPPED` 是有效组合。当前 session 标识在 `IDLE` 时清空，计数保留至下一次成功启动。
 
 控制客户端按需导入 `ros_control_client.py`，使用匿名 ROS 节点，发送控制 JSON 或读取一次状态；它不创建采集运行时。Topic 覆盖、超时和消息格式见 [ROS 控制接口](ros_external_system_architecture.md)。导出和清理命令见 [README](../README.md)。
 
@@ -186,7 +194,7 @@ pipelines:
 
 相机标定支持 `dist_model: equidistant`，要求 `dist_coeffs` 含四个有限数值，顺序为 OpenCV fisheye 的 `[k1, k2, k3, k4]`。`image_undistort` 使用 OpenCV fisheye 映射；输入与标定宽高比一致时缩放内参，宽高比不一致时跳过该样本。`write_debug_artifacts: true` 将诊断图像和参数写入会话的 `diagnostics/undistort/` 目录，默认值为 `false`。
 
-车型标定位于 `demo/calibration/<car-id>/cali.json`，仓库 YAML 默认指向 SA4。`tools/cali_parser.py VEHICLE_DIR -o OUTPUT` 读取外部车型目录并生成标定 JSON，自动创建输出父目录；省略 `-o` 时写入输入车型目录内的 `cali.json`。
+车型标定位于 `demo/calibration/<car-id>/cali.json`，仓库 YAML 默认指向 SA4。`python tools/toolkit.py calibration convert VEHICLE_DIR -o OUTPUT` 读取外部车型目录并生成标定 JSON，自动创建输出父目录；省略 `-o` 时写入输入车型目录内的 `cali.json`。原有 `tools/cali_parser.py` 入口仍可使用，二者委托相同实现。
 
 一次 session 的根目录是：
 
@@ -214,5 +222,7 @@ JPEG 质量为 95。ASCII PCD 字段为 `x y z intensity has_intensity`：有效
 ROS 安装、Master、自定义消息包、传感器 topic、标定源文件和模型权重由运行环境提供。节点类型使用源码中的固定注册表。
 
 构建后端在 wheel 中生成 `data_collect_dag/_demo.zip`，收录 demo YAML 和 `calibration/` 下的 JSON；源码包通过 `MANIFEST.in` 收录同一组模板。模型权重、ROS bag 和采集输出不打包。`init` 从可编辑 checkout 或安装包资源导出模板；安装及升级不修改已导出的配置。
+
+`tools/` 需要源码 checkout，不属于安装包入口或配置模板。点云、图像等工具共用数值处理与文件读取，查看器把本地 Plotly JavaScript 嵌入 HTML；压缩 PCD 与 YOLO 分别按需加载 Open3D 和 Ultralytics。它们不增加基础安装的推理依赖。共享投影函数保留源点索引，使颜色与像素对应，并根据相机参数选择 pinhole 或 equidistant 投影。
 
 模板读取和导出实现在 `config_templates.py`。Python 接口为 `export_config_templates(destination: Path, force: bool = False, car_id: Optional[str] = None) -> Path`，返回展开用户目录并解析后的目标路径。不指定车辆时导出全部标定并选择 SA4；指定车辆时只导出对应标定，配置和模型引用改为绝对路径。覆盖前检查目标路径，每个模板文件以原子替换方式更新；无关文件、未选择车辆的标定及模型权重保留。CLI 初始化成功后使用实际导出的配置显示路径、车辆和 pipeline 名称。

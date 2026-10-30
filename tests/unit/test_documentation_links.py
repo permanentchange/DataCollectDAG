@@ -22,6 +22,7 @@ def _documents():
     files = [ROOT / "README.md", ROOT / "AGENTS.md"]
     files.extend((ROOT / "docs").rglob("*.md"))
     files.extend((ROOT / "demo").rglob("*.md"))
+    files.extend((ROOT / "tools").rglob("*.md"))
     return files
 
 

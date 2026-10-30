@@ -172,6 +172,8 @@ data_collect_dag shutdown
 
 `run start` checks the pipeline name before replacing the current session. An unknown name preserves the active session, including its paused state, and records `last_error`. `run pause` pauses collection; `run resume` continues it. `run stop` ends the session and leaves the program available for another `run start`. `shutdown` ends the session, writes its summary and exits. Foreground Ctrl+C and `kill -TERM PID` also request cleanup and exit.
 
+An external ROS shutdown request, including `rosnode kill` or a same-name node registering with the same Master from another host, also requests session cleanup and process exit. An active session records `end_reason: ros_shutdown`; after the process exits, its local instance lock is released. This does not detect or reconnect after Master loss.
+
 The anonymous control client uses `/data_collect/control` and `/data_collect/status` by default. Write commands accept `--control-topic`; `status` accepts `--status-topic`. Match custom YAML topics with CLI overrides:
 
 ```bash
@@ -180,6 +182,10 @@ data_collect_dag status --status-topic /vehicle/status --timeout 5
 ```
 
 The client loads no collection YAML, calibration, DAG or inference model. `--timeout` is a finite positive number, defaulting to five seconds for the Master check and the topic connection/message wait. Missing Master, missing control subscriber, missing status publisher and detected send failures return nonzero. A sent command is asynchronous; query `status` to inspect State, Pipeline, Session, Saved, Skipped, Failed, Disk Free and Last Error. See [ROS control interface](docs/ros_external_system_architecture.md) for the message contract.
+
+The JSON status topic also carries `recent_session_status`, the result of the most recently ended session. It remains available when another session starts: `tool_state: RUNNING` with `recent_session_status: STOPPED` means the current session is running and a previous session stopped. Use `tool_state` and `current_session_id` to identify current activity. `run stop` leaves the program `IDLE`, clears current-session identifiers and retains counters until the next successful start.
+
+The one-shot control publisher uses synchronous publishing (`queue_size=None`). Noetic may print a `queue_size` SyntaxWarning for this setting; the command's exit code and subsequent status determine whether it succeeded.
 
 ### Demo pipelines
 
@@ -228,11 +234,34 @@ Calibration files use `demo/calibration/<car-id>/cali.json`. Camera entries requ
 
 ```bash
 /usr/bin/python3 tools/cali_parser.py /path/to/argus/SA14 -o demo/calibration/sa14/cali.json
+# Equivalent grouped tool command:
+/usr/bin/python3 tools/toolkit.py calibration convert /path/to/argus/SA14 -o demo/calibration/sa14/cali.json
 ```
 
 The tool creates output parent directories. Omitting `-o` writes `cali.json` inside the input vehicle directory.
 
 Session results under `<output.root_dir>/<session_id>/` include `debug.log`, `session_summary.json` and `saved_samples.json`. A configured Xtreme1 save node writes JPEG images, ASCII PCD and camera JSON under `xtreme1/<dataset_name>/`. `fps_undist` and `fps_undist_nomotion` save under `collect_demo` and include source distortion parameters in each camera entry; intrinsics scale to the saved image resolution. See [configuration and output formats](docs/architecture.md#4-数据与文件).
+
+## Repository tools
+
+The checkout includes a separate toolkit; it is not an installed `data_collect_dag` subcommand and is not exported by `init`:
+
+```bash
+/usr/bin/python3 tools/toolkit.py --help
+/usr/bin/python3 tools/toolkit.py cloud --help
+/usr/bin/python3 tools/toolkit.py dataset check /path/to/session/xtreme1/collect_demo
+```
+
+| Group | Commands |
+| --- | --- |
+| `cloud` | `view`, `bev`, `project` |
+| `dataset` | `check`, `select`, `merge`, `split`, `archive` |
+| `yolo` | `filter`, `frames` |
+| `calibration` | `convert` |
+| `ros` | `sync`, `record`, `camera-reset` |
+| `monitor` | `jetson`, `report` |
+
+Existing script paths delegate to shared implementations in `tools/lib/`. The toolkit supports offline HTML viewers, pinhole/fisheye camera projection, hard-link dataset preparation, ZIP archives and vehicle diagnostics. Optional tool dependencies remain separate from the base install. See the [toolkit guide](tools/README.md) for dependencies, defaults, compatibility details and complete workflows.
 
 ## Tests
 
@@ -251,4 +280,6 @@ source /opt/ros/noetic/setup.bash
 PYTHONPATH=src DCD_TEST_REAL_ROS=1 /usr/bin/python3 -m pytest tests/functional/test_ros_cli_integration.py -q
 ```
 
-These integration tests use standard ROS messages and temporary configurations. Base-install tests check FPS DAG construction without inference packages; packaging tests check template export from wheels, source distributions and editable installs. Development rules are in [AGENTS.md](AGENTS.md).
+These integration tests use standard ROS messages and temporary configurations. They cover foreground/background controls, external ROS shutdown, same-name node replacement, signal handling, summary writing, lock release and restart. The selected Python must have the ROS Python dependencies available, including `netifaces` for TCPROS connections.
+
+Base-install tests check FPS DAG construction without inference packages. Packaging tests use temporary installations to check template export and VCS upgrades. Toolkit tests use small offline datasets, fake predictions, recorded metrics and dry runs; they do not operate vehicle hardware. Test helpers are shared under `tests/helpers.py`. Python 3.8 environments such as `dcd` can run the same suites when their dependencies are available. Development rules are in [AGENTS.md](AGENTS.md).

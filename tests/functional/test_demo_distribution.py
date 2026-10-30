@@ -219,7 +219,8 @@ def test_vcs_install_replaces_lower_version_without_upgrade_flag(tmp_path):
     import setuptools
     import wheel
     build_paths = {str(Path(module.__file__).resolve().parent.parent) for module in (setuptools, wheel)}
-    env["PYTHONPATH"] = os.pathsep.join(sorted(build_paths))
+    site_dir = next((isolated / "lib").glob("python*/site-packages"))
+    (site_dir / "test_build_tools.pth").write_text("\n".join(sorted(build_paths)) + "\n")
     python = str(isolated / "bin/python")
     requirement = "git+" + source.as_uri()
     install = [python, "-m", "pip", "install", "--no-deps", "--no-build-isolation", requirement]

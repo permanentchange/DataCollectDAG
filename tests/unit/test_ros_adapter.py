@@ -17,6 +17,14 @@ class _FakeRospy:
         self.core = SimpleNamespace(is_initialized=lambda: True)
         self.init_calls = []
         self.subscribers = []
+        self.shutdown_hooks = []
+        self.shutdown = False
+
+    def on_shutdown(self, callback):
+        self.shutdown_hooks.append(callback)
+
+    def is_shutdown(self):
+        return self.shutdown
 
     def init_node(self, *args, **kwargs) -> None:
         self.init_calls.append((args, kwargs))
@@ -265,6 +273,85 @@ def test_start_checks_ros_master_before_importing_rospy(monkeypatch):
         adapter.start()
 
     assert imported == []
+
+
+def test_ros_shutdown_hook_is_registered_before_node_initialization(monkeypatch):
+    adapter = RosAdapter({}, "data_collect_dag", ControlConfig())
+    fake_rospy = _FakeRospy()
+    fake_rospy.core.is_initialized = lambda: False
+    notifications = []
+    adapter.bind_app(
+        status_callback=lambda: None,
+        start_callback=lambda _pipeline: None,
+        stop_callback=lambda: None,
+        pause_callback=lambda: None,
+        resume_callback=lambda: None,
+        ros_shutdown_callback=lambda: notifications.append("ros_shutdown"),
+    )
+
+    def close_during_init(*_args, **_kwargs):
+        assert len(fake_rospy.shutdown_hooks) == 1
+        fake_rospy.shutdown_hooks[0]()
+
+    fake_rospy.init_node = close_during_init
+    monkeypatch.setattr("data_collect_dag.ros_adapter.import_rospy", lambda: fake_rospy)
+    _skip_ros_master_wait(monkeypatch, adapter)
+
+    adapter.start()
+
+    # on_shutdown runs before rospy's own shutdown flag is raised.
+    assert not fake_rospy.is_shutdown()
+    assert adapter.is_shutdown()
+    assert adapter._status_stop.is_set()
+    assert fake_rospy.subscribers == []
+    assert notifications == ["ros_shutdown"]
+
+
+def test_shutdown_during_start_does_not_restart_status_publishing(monkeypatch):
+    adapter = RosAdapter({}, "data_collect_dag", ControlConfig(status_topic="/status"))
+    fake_rospy = _FakeRospy()
+    published = []
+    fake_rospy.Publisher = lambda *_args, **_kwargs: SimpleNamespace(
+        publish=published.append, unregister=lambda: None,
+    )
+
+    def resolve_then_close():
+        fake_rospy.shutdown_hooks[0]()
+        return {}
+
+    monkeypatch.setattr("data_collect_dag.ros_adapter.import_rospy", lambda: fake_rospy)
+    monkeypatch.setattr("data_collect_dag.ros_adapter.import_std_msgs_string", lambda: _StringMsg)
+    monkeypatch.setattr(adapter, "_resolve_topic_message_classes", resolve_then_close)
+    _skip_ros_master_wait(monkeypatch, adapter)
+
+    try:
+        adapter.start()
+        adapter._status_thread.join(timeout=1.0)
+        assert not adapter._status_thread.is_alive()
+        assert adapter._status_stop.is_set()
+        assert published == []
+    finally:
+        adapter.stop()
+
+
+@pytest.mark.parametrize("closing", [False, True])
+def test_status_publish_failure_only_logs_unexpected_errors(monkeypatch, caplog, closing):
+    adapter = RosAdapter({}, "data_collect_dag", ControlConfig(status_topic="/status"))
+    monkeypatch.setattr("data_collect_dag.ros_adapter.import_std_msgs_string", lambda: _StringMsg)
+
+    def publish(_message):
+        if closing:
+            adapter._on_ros_shutdown()
+        raise RuntimeError("transport closed")
+
+    adapter._publishers["status_topic"] = SimpleNamespace(publish=publish)
+    adapter._status_loop()
+
+    errors = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert len(errors) == (0 if closing else 1)
+    if errors:
+        assert errors[0].getMessage() == "failed to publish ROS status"
+        assert errors[0].exc_info[1].args == ("transport closed",)
 
 
 def test_publish_status_keeps_existing_full_payload():

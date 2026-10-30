@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import signal
 import threading
-import time
 from pathlib import Path
 from typing import Any, Dict
 
 from data_collect_dag.cli import build_parser
 from data_collect_dag.camera_calibration import read_distortion_params
 from data_collect_dag.config import load_app_config
-from data_collect_dag.control import ControlCommand, ControlCommandQueue
+from data_collect_dag.control import ControlCommand
 from data_collect_dag.logging_utils import configure_logging
 from data_collect_dag.models import RecentSessionStatus
 from data_collect_dag.ros_adapter import RosAdapter
@@ -48,7 +48,7 @@ class AppRuntime:
         self.status_manager.update_storage(None, self.app_config.disk_storage_limit_gb, self.app_config.disk_storage_need_gb)
         self.ros_adapter = RosAdapter(self.app_config.topics, self.app_config.ros_node_name, self.app_config.control)
         self.calibration = load_calibration(self.app_config.calibration_path)
-        self.command_queue = ControlCommandQueue()
+        self.command_queue: "queue.Queue[ControlCommand]" = queue.Queue()
         self.session_manager = SessionManager(
             self.app_config,
             self.calibration,
@@ -58,6 +58,7 @@ class AppRuntime:
         )
         self._stop_event = threading.Event()
         self._control_stop_event = threading.Event()
+        self._shutdown_requested = False
         self._control_thread = threading.Thread(target=self._control_loop, name="control-thread", daemon=True)
         self.ros_adapter.bind_app(
             status_callback=self.status_manager.snapshot,
@@ -66,20 +67,33 @@ class AppRuntime:
             pause_callback=self._handle_pause_command,
             resume_callback=self._handle_resume_command,
             shutdown_callback=self._handle_shutdown_command,
+            ros_shutdown_callback=self._handle_ros_shutdown,
         )
 
     def run(self) -> int:
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
         self.logger.info("starting app runtime config=%s pipeline=%s", self.app_config.config_path, self.pipeline_name)
-        self.ros_adapter.start()
-        self._control_thread.start()
-        self._submit_command(ControlCommand(kind="start", pipeline_name=self.pipeline_name))
-        while not self._stop_event.is_set():
-            time.sleep(0.2)
-        self._control_stop_event.set()
-        self._control_thread.join(timeout=1.0)
-        self.ros_adapter.stop()
+        control_started = False
+        try:
+            self.ros_adapter.start()
+            self._control_thread.start()
+            control_started = True
+            if self.ros_adapter.is_shutdown():
+                self._handle_ros_shutdown()
+            elif not self._shutdown_requested:
+                self._submit_command(ControlCommand(kind="start", pipeline_name=self.pipeline_name))
+            while not self._stop_event.wait(0.2):
+                if self.ros_adapter.is_shutdown() and not self._shutdown_requested:
+                    self._handle_ros_shutdown()
+        finally:
+            try:
+                if control_started:
+                    if not self._stop_event.is_set():
+                        self._submit_command(ControlCommand(kind="shutdown", reason="runtime_exit"))
+                    self._control_thread.join()
+            finally:
+                self.ros_adapter.stop()
         self.logger.info("app runtime stopped")
         return 0
 
@@ -100,6 +114,10 @@ class AppRuntime:
         self.logger.info("received shutdown command")
         self._submit_command(ControlCommand(kind="shutdown", reason="external_shutdown"))
 
+    def _handle_ros_shutdown(self) -> None:
+        self.logger.info("received ROS shutdown notification")
+        self._submit_command(ControlCommand(kind="shutdown", reason="ros_shutdown"))
+
     def _handle_pause_command(self) -> None:
         self.logger.info("received pause command")
         self._submit_command(ControlCommand(kind="pause"))
@@ -109,13 +127,15 @@ class AppRuntime:
         self._submit_command(ControlCommand(kind="resume"))
 
     def _submit_command(self, command: ControlCommand) -> None:
+        if command.kind == "shutdown":
+            self._shutdown_requested = True
         self.command_queue.put(command)
 
     def _control_loop(self) -> None:
         while not self._control_stop_event.is_set():
             try:
                 command = self.command_queue.get(timeout=0.2)
-            except Exception:
+            except queue.Empty:
                 continue
             try:
                 self._dispatch_command(command)
@@ -124,7 +144,14 @@ class AppRuntime:
                 self.status_manager.set_last_error(str(exc))
 
     def _dispatch_command(self, command: ControlCommand) -> None:
+        if self._stop_event.is_set():
+            return
         if command.kind == "start":
+            if self._shutdown_requested:
+                return
+            if self.ros_adapter.is_shutdown():
+                self._handle_ros_shutdown()
+                return
             self.status_manager.set_last_error(None)
             self.session_manager.start(command.pipeline_name or self.pipeline_name)
             return

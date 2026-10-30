@@ -16,36 +16,20 @@ def _load_projection_tool():
     return module
 
 
-def test_projection_tool_defaults_to_base_z_minus_two_to_three_meters():
-    module = _load_projection_tool()
-
-    assert module.MIN_BASE_HEIGHT_M == -2.0
-    assert module.MAX_BASE_HEIGHT_M == 3.0
-
-
-def test_projection_tool_supports_xyz_and_distance_color_modes_with_distance_default():
-    module = _load_projection_tool()
-    points = np.array([[3.0, 4.0, 12.0], [-1.0, 2.0, -2.0]], dtype=np.float64)
-
-    assert module.build_parser().parse_args(["session", "stem"]).color_by == "d"
-    assert module.build_parser().parse_args(["session", "stem", "--color-by", "x"]).color_by == "x"
-    np.testing.assert_array_equal(module.color_values(points, "x"), [3.0, -1.0])
-    np.testing.assert_array_equal(module.color_values(points, "y"), [4.0, 2.0])
-    np.testing.assert_array_equal(module.color_values(points, "z"), [12.0, -2.0])
-    np.testing.assert_array_equal(module.color_values(points, "d"), [13.0, 3.0])
-
-
-def test_projection_tool_color_range_defaults_and_clamps_values_at_boundaries():
+def test_projection_tool_defaults_and_overrides():
     module = _load_projection_tool()
     parser = module.build_parser()
-
-    assert parser.parse_args(["session", "stem"]).color_range == (0.2, 20.0)
-    assert parser.parse_args(["session", "stem", "--color-range", "-0.1,0.1"]).color_range == (-0.1, 0.1)
-    colors = height_to_rgb(np.array([0.1, 0.2, 10.0, 20.0, 21.0]), min_height=0.2, max_height=20.0)
-    np.testing.assert_array_equal(colors[0], [0, 0, 255])
-    np.testing.assert_array_equal(colors[-1], [255, 0, 0])
+    args = parser.parse_args(["session", "stem"])
+    assert args.pcd_range == (-10., 10., -10., 10., .2, 2.)
+    assert args.color_by == "d" and args.color_range == (.2, 20.)
+    assert parser.parse_args(["session", "stem", "--color-range", "-0.1,0.1"]).color_range == (-.1, .1)
     with pytest.raises(SystemExit):
         parser.parse_args(["session", "stem", "--color-range", "20,0.2"])
+
+
+@pytest.mark.parametrize("mode,expected", [("x", [3, -1]), ("y", [4, 2]), ("z", [12, -2]), ("d", [13, 3])])
+def test_projection_color_values(mode, expected):
+    np.testing.assert_array_equal(_load_projection_tool().values(np.array([[3., 4., 12.], [-1., 2., -2.]]), mode), expected)
 
 
 def test_project_base_points_uses_camera_intrinsics_and_base_to_camera_transform():
