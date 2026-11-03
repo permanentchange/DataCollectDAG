@@ -87,6 +87,24 @@ pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
 
 For GitHub, replace the URL with `git+https://github.com/permanentchange/DataCollectDAG.git@main`. Pip uses project versions for VCS upgrades; a different commit with the same version is not a new release. Use a tag or commit instead of a branch name when a fixed revision is required. Remote installation uses the version published to that repository, including its dependency declarations.
 
+To install the fixed v0.5.0 release after its tag has been pushed to Gitee:
+
+```bash
+pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
+  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@v0.5.0'
+```
+
+If code changes have been pushed without changing the project version, force a reinstall. When the dependency requirements are unchanged and already satisfied, use `--no-deps` to reinstall only this project:
+
+```bash
+pip3 install --force-reinstall --no-deps --no-build-isolation \
+  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
+```
+
+If dependency requirements have changed, install the required dependencies as well. Restart running collection processes after updating the package. Exported configurations are updated separately with `init` as described below.
+
 ### Optional dependencies and local development
 
 The installer supports five modes:
