@@ -38,13 +38,13 @@ The installation examples below use `--no-build-isolation` to reuse those tools.
 
 ### Install directly from a remote repository
 
-No local checkout is needed. The repository's `origin` remote is Gitee; `github` is GitHub. Both examples select `main`. Run either command:
+No local checkout is needed. The repository's `origin` remote is Gitee; `github` is GitHub. The Gitee examples select `master`; the GitHub examples select `main`. Run either command:
 
 ```bash
 # Gitee (origin): primary example for domestic access
 pip3 install --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
+  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
 ```
 
 ```bash
@@ -82,10 +82,10 @@ To upgrade from Gitee while retaining compatible dependencies:
 ```bash
 pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
+  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
 ```
 
-For GitHub, replace the URL with `git+https://github.com/permanentchange/DataCollectDAG.git@main`. Pip uses project versions for VCS upgrades; a different commit with the same version is not a new release. Use a tag or commit instead of `main` when a fixed revision is required. Remote installation uses the version published to that repository, including its dependency declarations.
+For GitHub, replace the URL with `git+https://github.com/permanentchange/DataCollectDAG.git@main`. Pip uses project versions for VCS upgrades; a different commit with the same version is not a new release. Use a tag or commit instead of a branch name when a fixed revision is required. Remote installation uses the version published to that repository, including its dependency declarations.
 
 ### Optional dependencies and local development
 
@@ -104,7 +104,7 @@ The pip-only `opencv` extra installs `opencv-python>=4.2,<4.12` for environments
 ```bash
 pip3 install --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'data-collect-dag[opencv] @ git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
+  'data-collect-dag[opencv] @ git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
 ```
 
 Use `[yolo]`, `[dev]` or `[yolo-dev]` in the same remote syntax for those extras. YOLO depends on pip OpenCV through Ultralytics; system OpenCV reuse applies to base and non-YOLO development installations.
@@ -137,7 +137,7 @@ pip3 install --no-build-isolation \
   --no-binary=psutil \
   "$HOME"/wheels/torch-*.whl \
   "$HOME"/wheels/torchvision-*.whl \
-  'data-collect-dag[yolo-arm] @ git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
+  'data-collect-dag[yolo-arm] @ git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
 ```
 
 Replace the globs with exact paths when multiple builds are present. The wheel paths fix the torch and torchvision sources during dependency resolution. The `[yolo-arm]` extra alone does not scan `~/wheels` or enforce source installation of psutil: `--no-binary=psutil` must be supplied to pip. `--find-links` alone does not guarantee selection of local builds.
