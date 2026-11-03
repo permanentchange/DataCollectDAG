@@ -43,7 +43,7 @@
 
 `RosAdapter` 在 ROS 初始化前注册 `rospy.on_shutdown()`，将外部 ROS 关闭通知转入同一控制队列，主循环也检查 ROS 关闭状态。`rosnode kill` 或其他主机向同一 Master 注册同名节点触发关闭后，程序停止活动 session（`end_reason: ros_shutdown`）并退出释放本机锁。关闭回调不等待 session 清理；启动期间收到关闭请求会跳过初始 pipeline，重复请求不会重复收尾。Master 失联检测及自动重连不在此流程内。
 
-命令使用标准库 `queue.Queue` 传递，控制线程串行执行。`SessionRuntime` 的启动失败和正常停止共用资源释放及摘要构造方法；取消、监控线程退出、解绑、工作线程等待、逆序节点 teardown 和线程池关闭保持同一执行顺序。单步清理失败继续执行后续步骤并聚合错误。启动失败的摘要原因保持 `setup_failed`；正常停止还写入保存样本索引，清理失败时记录 `FAILED` 及对应原因。
+命令使用标准库 `queue.Queue` 传递，控制线程串行执行。会话目录创建后的 setup 失败与正常停止共用资源释放及摘要构造方法：请求取消、停止存储监控、解绑 session、限时等待工作线程及持续时间监控线程、逆序节点 teardown，最后等待节点线程池退出。单步清理失败继续执行后续步骤并聚合错误。目录创建前的容量检查失败直接报告 `IDLE` / `FAILED`，不创建该会话目录；目录创建失败也不会写摘要。目录创建后的 setup 失败尝试写入原因为 `setup_failed` 的失败摘要，不写 `saved_samples.json`；正常停止尝试写入样本索引和摘要，清理失败时记录 `FAILED` 及对应原因。文件写入失败通过日志和 `last_error` 报告，不能保证索引或摘要存在。
 
 状态中的 `tool_state` 表示当前工具状态，`recent_session_status` 保留最近结束的 session 结果，后续成功启动不会清空它；两者分别为 `RUNNING` 和 `STOPPED` 是有效组合。当前 session 标识在 `IDLE` 时清空，计数保留至下一次成功启动。
 
@@ -54,6 +54,8 @@
 `inspect --config CFG [--pipeline NAME]` 复用 `load_app_config`，先校验整个文件再生成摘要。输出包含程序版本、配置及输出路径、存储限制、标定路径、配置中的 ROS 节点名和控制/状态 topic、topic 数量及 pipeline 描述和主数据源；指定 pipeline 时增加预检查、停止条件、节点和边。省略的接口显示为未配置。
 
 静态检查包括结构、引用、节点类型、起止节点、环路、可达性和已实现的节点参数约束。它不导入节点实现、不获取实例锁、不连接 ROS、不读取标定或模型、不创建目录或会话；成功时明确说明 topic 在线情况、消息包、标定/模型加载及 CUDA 未检查。配置错误或未知 pipeline 返回非零；其他 pipeline 的错误也不会被跳过。初始化与查看实现分别位于 `config_templates.py` 和 `config_summary.py`。
+
+静态通过不等于所有节点已具备运行条件。例如，保存节点的相机绑定及标定是否齐全、点云节点的外参是否存在，要到 session 的节点 `setup()` 阶段检查。静态解析允许省略 `calibration.path`，但启动 `AppRuntime` 时必须提供并成功加载该文件。
 
 ### 数据执行
 
@@ -145,7 +147,20 @@ pipelines:
 - `stop_conditions.max_duration_sec` 和 `max_saved_samples` 都可省略；达到条件后结束当前 session，状态为 `COMPLETED`。持续时间不累计暂停时间。
 - 缓存必须为每个 topic 提供 `max_frames` 与 `max_age_sec`，由 `defaults_by_role` 与 `topic_overrides` 合并；同名 override 覆盖对应默认字段。
 
-完整示例：`demo/cfg.yaml` 包含 `init`、`fps`、`fps_undist`、`fps_undist_nomotion`、`fps_with_yolo`、`compare_motion`。`init` 预检查 topic、执行同步，活动时长上限为 2 秒，不包含保存节点；其他 pipeline 的活动时长上限为 6,000 秒。`fps`、`fps_undist`、`fps_undist_nomotion` 和 `fps_with_yolo` 的目标频率为 1 FPS。`fps_undist` 按相机绑定顺序保存五路原图 JPEG，并执行 FPS 控制、同步和点云运动补偿；`compare_motion` 将两种点云写入 `collect_demo` 和 `collect_demo_no_motion`。会话完成后程序保持可控制状态，不自动退出。
+### Demo pipeline
+
+`demo/cfg.yaml` 的实际处理和输出如下。所有预检查窗口均为 500 ms；五个保存 pipeline 都以 1 FPS 为目标，先执行车速筛选。保存的图像均编码为 JPEG，原图指未去畸变的图像。
+
+| Pipeline | 图像 | 点云 | 保存数据集 | 预检查 topic 数 | 活动时长上限 |
+| --- | --- | --- | --- | ---: | ---: |
+| `init` | 仅同步 | 仅同步 | 不保存 | 15 | 2 秒 |
+| `fps` | 五路去畸变 | 运动补偿至 `base` 后合并 | `collect_demo` | 15 | 6,000 秒 |
+| `fps_undist` | 五路原图，附源畸变参数 | 运动补偿至 `base` 后合并 | `collect_demo` | 15 | 6,000 秒 |
+| `fps_undist_nomotion` | 五路原图，附源畸变参数 | 静态转换至 `base` 后合并 | `collect_demo` | 11 | 6,000 秒 |
+| `fps_with_yolo` | 原图经 YOLO 筛选后，五路去畸变 | 运动补偿至 `base` 后合并 | `collect_demo` | 15 | 6,000 秒 |
+| `compare_motion` | 五路去畸变 | 分别运动补偿与静态转换，各自合并 | `collect_demo`、`collect_demo_no_motion` | 15 | 6,000 秒 |
+
+`fps_with_yolo` 对同步后的 `front_camera` 执行推理，需要 YOLO extra 和本地模型 `demo/models/yolo26m.pt`；其余 pipeline 不使用推理包。会话完成后程序保持可控制状态，不自动退出。
 
 `fps_undist_nomotion` 保存五路原始图像，以五个 `pointcloud_transform` 节点将雷达点云按静态外参转换到 `base` 后合并，写入 `collect_demo`；不执行图像去畸变或自车运动补偿。它保留 `fps_undist` 的同步、相机顺序和保存参数，预检查包含五路相机、五路雷达与 `/iccp_status`，共 11 路，窗口为 500 ms。定位、IMU、里程计及 NMEA 无需发布消息，但全局 `ros.topics` 引用的消息类型仍需可解析，包括 `vcu_msgs/ICCPStatus`。所有 demo pipeline 均预检查车速 topic；`init` 不按速度过滤，因此停车时仍执行同步。运行中的程序不热加载配置；修改后须重新启动程序，使用导出配置时须单独更新或重新导出该 YAML。
 
@@ -166,6 +181,10 @@ pipelines:
 | 保存 | `xtreme1_structured_save` | 保存 Xtreme1 风格的图片、PCD 和标定配置 |
 
 `fps_guard` 根据主帧时间戳、同一 `gate_id` 的最近标记和正数 `max_fps` 决定是否通过；`fps_marker` 更新时间戳。demo 将 marker 接在保存节点之后。实现位于 `nodes/common.py`。
+
+`time_sync` 通过 `inputs.reference_frame` 指定参考帧、`config.source` 指定 topic key，匹配结果写入 `outputs.matched_frame`。`multi_time_sync` 使用同一参考帧逐路匹配 `config.sources`，输出键由 `outputs.<source>` 指定，省略时使用 source 本身。两者默认 `strategy: nearest`、`max_time_diff_ms: 50`、`wait_timeout_ms: 0`、`required: false`。`nearest` 可等待缓存中的匹配帧；多路同步共用一个等待截止时间，不为每路重新计时。`latest_before` 只查询不晚于参考时间且年龄在限额内的最近缓存帧，不等待新消息。必选数据缺失时跳过样本，非必选数据缺失时继续并记录 warning，不写对应输出。
+
+`pointcloud_motion_compensation` 需要点级时间戳、参考帧，以及覆盖点云时间范围和参考时刻的至少两帧定位数据；`pose_wait_timeout_ms` 默认 `0`，可配置等待覆盖，`localization_margin_ms` 默认 `200`，用于扩大定位查询范围。`required` 默认 `true`，缺少时间戳或定位覆盖时跳过样本；设为 `false` 时可返回 warning 并继续，但不会生成补偿后的输出。`use_base_frame` 默认 `false`；demo 显式设为 `true`，供保存节点使用。`pointcloud_transform` 只使用 `sensor_topic` 对应的静态外参转换到 `base`，不需要点级时间戳或定位数据。
 
 `speed_gate` 要求 `inputs.reference_frame` 指向参考帧，`config.source` 引用 `role: vehicle_status` 的 topic。该 role 从 `vcu_msgs/ICCPStatus` 的 `Current_Speed` 提取 m/s 速度，使用正数 `header.stamp` 作为源时间戳，并保留原始消息。demo 的车速缓存保留 100 帧、2 秒。节点按源时间戳选取不晚于参考帧的最近状态，忽略到达顺序，不额外等待消息；两者必须使用同一时间基准。
 
@@ -192,9 +211,11 @@ pipelines:
 
 `ros_messages.py` 将 ROS 消息包装为图像、点云、定位、IMU、里程计、车辆状态或文本 frame。图像解码和点云解析可以在处理节点使用数据时延后进行。标定 JSON 通过 `app.py::load_calibration` 读取，使用顶层 `images` 和 `pointclouds`；点云变换只选取包含 `sensor2base` 的条目。
 
-相机标定支持 `dist_model: equidistant`，要求 `dist_coeffs` 含四个有限数值，顺序为 OpenCV fisheye 的 `[k1, k2, k3, k4]`。`image_undistort` 使用 OpenCV fisheye 映射；输入与标定宽高比一致时缩放内参，宽高比不一致时跳过该样本。`write_debug_artifacts: true` 将诊断图像和参数写入会话的 `diagnostics/undistort/` 目录，默认值为 `false`。
+采集运行时目前只接受相机标定 `dist_model: equidistant`，要求 `dist_coeffs` 含四个有限数值，顺序为 OpenCV fisheye 的 `[k1, k2, k3, k4]`。加载标定时会校验 `images` 中的每一项，即使选中的 pipeline 不去畸变也要通过此校验。`image_undistort` 使用 OpenCV fisheye 映射；输入与标定宽高比一致时缩放内参，宽高比不一致时跳过该样本。`write_debug_artifacts: true` 将诊断图像和参数写入会话的 `diagnostics/undistort/` 目录，默认值为 `false`。图像处理经 `opencv_compat.py` 按需导入 `cv2`，可复用系统 OpenCV；安装方式见 [README](../README.md#requirements)。
 
 车型标定位于 `demo/calibration/<car-id>/cali.json`，仓库 YAML 默认指向 SA4。`python tools/toolkit.py calibration convert VEHICLE_DIR -o OUTPUT` 读取外部车型目录并生成标定 JSON，自动创建输出父目录；省略 `-o` 时写入输入车型目录内的 `cali.json`。原有 `tools/cali_parser.py` 入口仍可使用，二者委托相同实现。
+
+`bash tools/batch_cali_parser.sh [OPTIONS] [CAR_ID ...]` 批量调用同一转换入口，将结果写入 `<output-root>/<小写 car-id>/cali.json`。其默认车辆列表是待转换目标，不代表这些车辆全部已有随包标定；`init` 可导出的车型以实际模板资源为准。输入来源、覆盖行为和预演参数见 [批量标定转换](../tools/README.md#batch-calibration-conversion)。
 
 一次 session 的根目录是：
 
@@ -215,7 +236,13 @@ pipelines:
 
 JPEG 质量为 95。ASCII PCD 字段为 `x y z intensity has_intensity`：有效 intensity 须为 0 到 255 的整数，缺失值写为 0 并以 `has_intensity: 0` 标识。相机 JSON 顶层为 `{"items": [...]}`，每项包括缩放后的 `camera_internal`、`width`、`height`、按列展开的 `camera_external` 及 `rowMajor: false`；启用 `include_distortion_params` 时包含源畸变参数。
 
-`saved_samples.json` 的顶层格式为 `{"items": [...]}`，只记录保存成功的样本。`session_summary.json` 记录 session id、pipeline、开始/结束时间、`STOPPED` / `COMPLETED` / `FAILED` 状态、原因、计数、输出路径和错误。指标和 ROS 状态字段见 [外部接口](ros_external_system_architecture.md)。
+保存节点在 setup 时创建数据集子目录，在处理样本时依次写入图像、PCD 和相机 JSON；整组帧文件不作为一个事务提交，失败可能留下部分文件。是否成功保存以节点写入的 `save_result.saved` 元数据为依据。
+
+`saved_samples.json` 的顶层格式为 `{"items": [...]}`，在正常停止流程中一次性写入保存记录；仅同步的 session 对应空列表。每条记录包含样本及主帧时间戳、相机 topic、处理标记、`xtreme1_paths` 和节点计时。一个样本只要有成功保存的元数据，`samples_saved` 就增加一次，不因多个保存节点而增加多次，也不要求该样本最终 DAG 结果为 `OK`。
+
+多个保存节点共用一个 `save_result`，后成功写入的节点覆盖之前的元数据，因此 `compare_motion` 的单条 `xtreme1_paths` 只对应其中一套数据集；并行执行时不能依赖它固定指向哪一套。`session_summary.json` 的 `save_outputs` 汇总各成功保存节点记录的相机 JSON 和 PCD 路径，不包含 JPEG 路径。需要读取两套数据时，应分别遍历两套数据集目录。
+
+`session_summary.json` 记录 session id、pipeline、开始/结束时间、`STOPPED` / `COMPLETED` / `FAILED` 状态、原因、计数、输出路径和错误。setup 失败与正常停止的文件差异见 [控制与会话](#控制与会话)。指标和 ROS 状态字段见 [外部接口](ros_external_system_architecture.md)。
 
 ## 5. 资源与打包
 
