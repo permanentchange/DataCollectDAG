@@ -19,6 +19,7 @@ from data_collect_dag.models import (
     VehicleStatusFrame,
 )
 from data_collect_dag.ros_env import ensure_ros_python_path, resolve_message_definition_path
+from data_collect_dag.opencv_compat import load_cv2
 from data_collect_dag.transforms import normalize_quaternion_xyzw
 
 
@@ -269,7 +270,7 @@ def frame_from_ros_message(topic_key: str, ros_topic: str, role: str, sensor_nam
 
 
 def _parse_ros_image_message(msg: Any) -> np.ndarray:
-    import cv2
+    cv2 = load_cv2()
 
     raw = np.frombuffer(msg.data, dtype=np.uint8)
     if msg.encoding == "bgr8":

@@ -21,21 +21,22 @@ def test_source_version_matches_project_metadata():
 def test_runtime_dependencies_are_declared():
     requirements = metadata.requires("data-collect-dag") or []
     names = {item.split(";")[0].split(" ")[0].split("[")[0].split(">")[0].split("<")[0].split("=")[0].strip().lower() for item in requirements if "extra ==" not in item}
-    assert {"numpy", "pyyaml", "pillow", "opencv-python", "rospkg"} <= names
+    assert names == {"numpy", "pyyaml", "pillow", "rospkg"}
 
 
 def test_optional_dependency_groups_are_declared():
     dist = metadata.distribution("data-collect-dag")
     extras = set(dist.metadata.get_all("Provides-Extra") or [])
-    assert extras == {"base", "yolo", "yolo-arm", "dev", "yolo-dev"}
+    assert extras == {"base", "opencv", "yolo", "yolo-arm", "dev", "yolo-dev"}
 
 
 @pytest.mark.parametrize("mode, expected", [
     ("base", set()),
-    ("yolo", {"ultralytics"}),
-    ("yolo-arm", {"ultralytics", "psutil"}),
+    ("opencv", {"opencv-python"}),
+    ("yolo", {"ultralytics", "opencv-python"}),
+    ("yolo-arm", {"ultralytics", "opencv-python", "psutil"}),
     ("dev", {"pytest"}),
-    ("yolo-dev", {"ultralytics", "pytest"}),
+    ("yolo-dev", {"ultralytics", "opencv-python", "pytest"}),
 ])
 def test_installation_mode_dependencies(mode, expected):
     requirements = [Requirement(line) for line in metadata.requires("data-collect-dag") or []]
@@ -54,6 +55,19 @@ def test_arm_psutil_dependency_is_pinned():
     assert str(psutil[0].specifier) == "==6.1.1"
     assert psutil[0].marker is not None
     assert psutil[0].marker.evaluate({"extra": "yolo-arm"})
+
+
+def test_opencv_version_range_and_optional_groups():
+    requirements = [Requirement(line) for line in metadata.requires("data-collect-dag") or []]
+    opencv = [requirement for requirement in requirements if requirement.name == "opencv-python"]
+    assert opencv
+    for requirement in opencv:
+        assert requirement.marker is not None
+        assert "4.2.0" in requirement.specifier
+        assert "4.11.0.86" in requirement.specifier
+        assert "4.1.0" not in requirement.specifier
+        assert "4.12.0" not in requirement.specifier
+        assert not requirement.marker.evaluate({"extra": ""})
 
 
 def test_inference_backends_not_required_by_base_install():

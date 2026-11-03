@@ -4,6 +4,8 @@ from typing import Dict, Tuple
 
 import numpy as np
 
+from data_collect_dag.opencv_compat import load_cv2
+
 
 def filter_points_by_base_height(points_xyz: np.ndarray, min_height: float, max_height: float) -> np.ndarray:
     """Return finite base-frame points whose inclusive Z height is in range."""
@@ -54,7 +56,7 @@ def project_camera_points(points, matrix, transform, width, height, model=None, 
     indices = np.flatnonzero(np.isfinite(camera).all(axis=1) & (camera[:, 2] > 0))
     visible = camera[indices, :3]
     if model == 'equidistant':
-        import cv2
+        cv2 = load_cv2()
         distortion = np.asarray(coefficients, dtype=np.float64)
         if distortion.size != 4 or not np.isfinite(distortion).all():
             raise ValueError("equidistant requires four finite distortion coefficients")

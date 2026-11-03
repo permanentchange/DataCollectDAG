@@ -9,14 +9,9 @@ from data_collect_dag.camera_calibration import read_distortion_params
 from data_collect_dag.io_utils import save_jpg, write_json
 from data_collect_dag.models import ImageFrame, NodeOutcome, NodeResult
 from data_collect_dag.nodes.base import BaseNode
+from data_collect_dag.opencv_compat import load_cv2 as _load_cv2
 from data_collect_dag.ros_messages import ensure_image_frame_decoded
 from data_collect_dag.sample_context import MissingContextKeyError
-
-
-def _load_cv2():
-    import cv2
-
-    return cv2
 
 
 class ImageUndistortNode(BaseNode):

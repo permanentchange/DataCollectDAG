@@ -11,6 +11,8 @@ import sys
 import tarfile
 from zipfile import ZipFile
 
+from packaging.requirements import Requirement
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -78,6 +80,12 @@ def test_sdist_wheel_and_offline_demo_export(tmp_path):
         metadata_file = next(name for name in distribution.namelist() if name.endswith(".dist-info/METADATA"))
         metadata = Parser().parsestr(distribution.read(metadata_file).decode("utf-8"))
         assert metadata["Version"] == version
+        requirements = [Requirement(line) for line in metadata.get_all("Requires-Dist") or []]
+        base = {req.name.lower() for req in requirements if req.marker is None}
+        assert base == {"numpy", "pyyaml", "pillow", "rospkg"}
+        opencv = [req for req in requirements if req.name == "opencv-python"]
+        assert opencv and all(req.marker is not None for req in opencv)
+        assert all("4.2.0" in req.specifier and "4.12.0" not in req.specifier for req in opencv)
         with ZipFile(io.BytesIO(distribution.read("data_collect_dag/_demo.zip"))) as bundle:
             bundled = {name: bundle.read(name) for name in bundle.namelist()}
     expected = {path.relative_to(demo).as_posix(): path.read_bytes()

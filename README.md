@@ -8,56 +8,122 @@ DataCollectDAG is a Python 3.8 / ROS1 Noetic application for collecting sensor d
 - A running ROS master and the message packages referenced by the YAML. Build custom packages such as `bdstar` and `igv_msgs` in a catkin workspace and source its setup script.
 - Readable calibration JSON and the live topics required by the selected pipeline. Bags, model weights and vehicle source files are external resources.
 
-The base package depends on NumPy, PyYAML, Pillow, OpenCV and rospkg. Inference packages are optional and loaded when a YOLO node is initialized. Configuration initialization, inspection and cleanup run without a ROS master.
+The base pip dependencies are NumPy, PyYAML, Pillow and rospkg. Image processing also needs OpenCV: reuse an importable system `cv2` (including Ubuntu/ROS OpenCV 4.2), or explicitly install the `opencv` extra. Base installation does not install pip OpenCV or inference packages. YOLO extras include pip OpenCV and Ultralytics requirements. Configuration initialization, inspection and cleanup run without a ROS master.
 
 ## Install
 
-On Ubuntu with system Python 3.8, from the repository root:
+### Check the Python and ROS environment
+
+Use Linux, Python 3.8 and the same interpreter for installation and execution. The following examples use `pip3` paired with system `/usr/bin/python3`; check `pip3 --version` before installing:
 
 ```bash
+python3 --version
+pip3 --version
 source /opt/ros/noetic/setup.bash
 # Source this too when using custom ROS messages:
 source /path/to/catkin_ws/devel/setup.bash
-/usr/bin/python3 --version
-/usr/bin/python3 -m pip install -e .
-data_collect_dag --help
+python3 -c "import cv2; print(cv2.__version__); print(cv2.__file__)"
+python3 -c "from importlib.metadata import version; print('setuptools:', version('setuptools')); print('wheel:', version('wheel'))"
 ```
 
-Use the same Python environment for installation and execution. A virtual environment created with `/usr/bin/python3 -m venv --system-site-packages .venv` can also access system ROS dependencies. The build backend requires `setuptools>=68` and `wheel`; pip normally supplies these in its isolated build environment. For offline builds with `--no-build-isolation`, prepare them in the selected Python environment first.
+An existing system `cv2` does not need a matching `opencv-python` entry in `pip3 list`. OpenCV 4.2 supports the runtime's image conversion, fisheye undistortion and projection interfaces. If `cv2` is missing, install the system package (on Ubuntu, `sudo apt-get install python3-opencv`) or use the explicit `opencv` extra below.
 
-Installation from Git requires Git:
+Source builds require `setuptools>=68` and `wheel`. If either is missing or too old, prepare them once:
 
 ```bash
-/usr/bin/python3 -m pip install --upgrade 'git+https://github.com/permanentchange/DataCollectDAG.git@main'
-# Alternative repository:
-# /usr/bin/python3 -m pip install --upgrade 'git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
-/usr/bin/python3 -m pip show data-collect-dag
+pip3 install --index-url https://pypi.tuna.tsinghua.edu.cn/simple 'setuptools>=68' wheel
 ```
 
-### Installation modes
+The installation examples below use `--no-build-isolation` to reuse those tools. Without that option, pip prepares a temporary isolated build environment and may download build dependencies even when the active environment has them. Compatible installed runtime dependencies are reused; missing or incompatible dependencies are resolved normally. Git must be installed for remote installation.
 
-The installer and pip extras support the same five modes:
+### Install directly from a remote repository
+
+No local checkout is needed. The repository's `origin` remote is Gitee; `github` is GitHub. Both examples select `main`. Run either command:
+
+```bash
+# Gitee (origin): primary example for domestic access
+pip3 install --no-build-isolation \
+  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
+```
+
+```bash
+# GitHub (github): alternative repository
+pip3 install --no-build-isolation \
+  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+  'git+https://github.com/permanentchange/DataCollectDAG.git@main'
+```
+
+These HTTPS URLs do not require the SSH setup used by the checkout's Git remotes. The [Tsinghua PyPI mirror](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/) supplies Python dependencies; Git source is downloaded directly from the selected repository. `--index-url` selects the mirror explicitly. Pip does not treat `--extra-index-url` as a lower-priority fallback. If a package is unavailable on the mirror, explicitly select another index for that operation.
+
+Optionally make Tsinghua the default for future pip commands and `setup.bash` installations:
+
+```bash
+pip3 config --user set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+A virtual environment created with `/usr/bin/python3 -m venv --system-site-packages .venv` can access system ROS and OpenCV dependencies. Activate it before installation and check that `python3` and `pip3` select that environment.
+
+### Verify and upgrade
+
+```bash
+pip3 show data-collect-dag
+python3 -c "import cv2; print(cv2.__version__); print(cv2.__file__)"
+data_collect_dag --version
+data_collect_dag --help
+data_collect_dag init ~/data_collect_config --car-id sa4
+data_collect_dag inspect --config ~/data_collect_config/cfg.yaml
+```
+
+On a system-OpenCV installation, the `cv2` path should still point to the system module. Inspection validates configuration offline; it does not check live ROS topics or external resources.
+
+To upgrade from Gitee while retaining compatible dependencies:
+
+```bash
+pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
+  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
+```
+
+For GitHub, replace the URL with `git+https://github.com/permanentchange/DataCollectDAG.git@main`. Pip uses project versions for VCS upgrades; a different commit with the same version is not a new release. Use a tag or commit instead of `main` when a fixed revision is required. Remote installation uses the version published to that repository, including its dependency declarations.
+
+### Optional dependencies and local development
+
+The installer supports five modes:
 
 | Mode | Purpose |
 | --- | --- |
-| `base` | Base runtime, without inference packages; also the default |
-| `yolo` | Base runtime and Ultralytics, including its PyTorch requirements |
+| `base` | Base runtime using an existing OpenCV; also the default |
+| `yolo` | Base runtime and pip OpenCV/Ultralytics, including PyTorch requirements |
 | `yolo-arm` | YOLO with local Jetson PyTorch wheels and psutil 6.1.1 |
 | `dev` | Base runtime and pytest |
 | `yolo-dev` | YOLO and pytest |
 
+The pip-only `opencv` extra installs `opencv-python>=4.2,<4.12` for environments without system OpenCV. It is not a `setup.bash` mode. Install it directly from either repository using the named extra syntax:
+
 ```bash
-/usr/bin/python3 -m pip install -e '.[yolo]'
-# Development without inference dependencies:
-/usr/bin/python3 -m pip install -e '.[dev]'
-# Remote YOLO installation:
-/usr/bin/python3 -m pip install --upgrade \
-  'data-collect-dag[yolo] @ git+https://github.com/permanentchange/DataCollectDAG.git@main'
+pip3 install --no-build-isolation \
+  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+  'data-collect-dag[opencv] @ git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
 ```
 
-Plain `pip install .` and `pip install '.[base]'` install the same base runtime. `dev` adds only pytest; install standalone tool dependencies such as Open3D separately. Model export and ONNX dependencies are also installed separately when needed. ONNX models run through Ultralytics in the `yolo_gate` node.
+Use `[yolo]`, `[dev]` or `[yolo-dev]` in the same remote syntax for those extras. YOLO depends on pip OpenCV through Ultralytics; system OpenCV reuse applies to base and non-YOLO development installations.
 
-`bash setup.bash [base|yolo|yolo-arm|dev|yolo-dev]` installs from the checkout using `python` on `PATH`, which must be Python 3.8. Omitting the mode selects `base`. The node's `device` setting selects the inference device. These are the only supported modes; there is no `yolo-arm-dev` mode.
+From a local checkout, editable installation supports development:
+
+```bash
+pip3 install --no-build-isolation --index-url https://pypi.tuna.tsinghua.edu.cn/simple -e .
+# Development with an existing system OpenCV:
+pip3 install --no-build-isolation --index-url https://pypi.tuna.tsinghua.edu.cn/simple -e '.[dev]'
+# Only when a pip OpenCV installation is needed:
+pip3 install --no-build-isolation --index-url https://pypi.tuna.tsinghua.edu.cn/simple -e '.[opencv]'
+# YOLO:
+pip3 install --no-build-isolation --index-url https://pypi.tuna.tsinghua.edu.cn/simple -e '.[yolo]'
+```
+
+Plain `pip3 install .` and `pip3 install '.[base]'` install the same base runtime. `dev` adds only pytest; install standalone tool dependencies such as Open3D separately. Model export and ONNX dependencies are also installed separately when needed. ONNX models run through Ultralytics in the `yolo_gate` node.
+
+`bash setup.bash [base|yolo|yolo-arm|dev|yolo-dev]` installs from the checkout using `python` on `PATH`, which must be Python 3.8. It inherits the configured pip index; omitting the mode selects `base`. The node's `device` setting selects the inference device. There is no `yolo-arm-dev` mode.
 
 For Jetson YOLO installations, run `bash setup.bash yolo-arm`. It checks both local wheels before uninstalling packages, reinstalls `torch` and `torchvision` directly from `~/wheels` with `--no-deps`, then installs the YOLO extra with those exact wheel files as constraints. It never downloads remote torch or torchvision wheels, including same-version alternatives. Conflicting requirements fail rather than selecting another build; other dependencies can be downloaded normally. The script selects its preferred filenames or a single wheel per package. Set `DCD_WHEEL_DIR`, `DCD_TORCH_WHEEL` and `DCD_TORCHVISION_WHEEL` to choose specific compatible builds. Match Python, JetPack and CUDA to the device.
 
@@ -66,11 +132,12 @@ The `yolo-arm` extra pins `psutil==6.1.1`. The installer passes `--no-binary=psu
 For remote pip installation without a checkout, explicitly supply both local wheels and `--no-binary=psutil` in the same command. This example assumes exactly one compatible wheel per package in `~/wheels`:
 
 ```bash
-/usr/bin/python3 -m pip install --upgrade \
+pip3 install --no-build-isolation \
+  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
   --no-binary=psutil \
   "$HOME"/wheels/torch-*.whl \
   "$HOME"/wheels/torchvision-*.whl \
-  'data-collect-dag[yolo-arm] @ git+https://github.com/permanentchange/DataCollectDAG.git@main'
+  'data-collect-dag[yolo-arm] @ git+https://gitee.com/xfzhou95/DataCollectDAG.git@main'
 ```
 
 Replace the globs with exact paths when multiple builds are present. The wheel paths fix the torch and torchvision sources during dependency resolution. The `[yolo-arm]` extra alone does not scan `~/wheels` or enforce source installation of psutil: `--no-binary=psutil` must be supplied to pip. `--find-links` alone does not guarantee selection of local builds.
@@ -268,7 +335,7 @@ Existing script paths delegate to shared implementations in `tools/lib/`. The to
 Run with system Python 3.8 from the repository root:
 
 ```bash
-/usr/bin/python3 -m pip install -e '.[dev]'
+pip3 install --no-build-isolation --index-url https://pypi.tuna.tsinghua.edu.cn/simple -e '.[dev]'
 PYTHONPATH=src /usr/bin/python3 -m pytest tests/unit -q
 PYTHONPATH=src /usr/bin/python3 -m pytest tests/functional -q
 ```
