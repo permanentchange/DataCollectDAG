@@ -10,7 +10,7 @@ from setuptools.command.build_py import build_py
 class BuildPyWithDemo(build_py):
     def run(self):
         super().run()
-        if self.editable_mode:
+        if getattr(self, "editable_mode", False):
             return
         demo = Path(__file__).resolve().parent / "demo"
         assets = sorted(list(demo.glob("*.yaml")) + list(demo.glob("*.yml"))
@@ -26,7 +26,7 @@ class BuildPyWithDemo(build_py):
 
     def get_outputs(self, include_bytecode=1):
         outputs = super().get_outputs(include_bytecode)
-        if not self.editable_mode:
+        if not getattr(self, "editable_mode", False):
             outputs.append(str(Path(self.build_lib) / "data_collect_dag" / "_demo.zip"))
         return outputs
 

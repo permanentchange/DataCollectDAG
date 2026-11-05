@@ -2,9 +2,9 @@
 
 import io
 import os
+from configparser import ConfigParser
 from email.parser import Parser
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -18,13 +18,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _project_version():
-    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    return re.search(r'^version\s*=\s*"([^"]+)"', project, re.MULTILINE).group(1)
+    project = (ROOT / "setup.cfg").read_text(encoding="utf-8")
+    config = ConfigParser()
+    config.read_string(project)
+    return config["metadata"]["version"]
 
 
 def _copy_source(source):
     source.mkdir()
-    for name in ["pyproject.toml", "setup.py", "MANIFEST.in", "README.md"]:
+    for name in ["pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in", "README.md"]:
         shutil.copy2(ROOT / name, source / name)
     shutil.copytree(ROOT / "src", source / "src", ignore=shutil.ignore_patterns("__pycache__", "*.egg-info"))
     demo = source / "demo"
@@ -33,6 +35,17 @@ def _copy_source(source):
         for path in (ROOT / "demo").glob(pattern):
             shutil.copy2(path, demo / path.name)
     shutil.copytree(ROOT / "demo/calibration", demo / "calibration", symlinks=True)
+
+
+def _isolated_python(directory, run):
+    """Reuse the caller's tools without installing into its environment."""
+    run([sys.executable, "-m", "venv", "--system-site-packages", "--without-pip", str(directory)])
+    import setuptools
+    import wheel
+    build_paths = {str(Path(module.__file__).resolve().parent.parent) for module in (setuptools, wheel)}
+    site_dir = next((directory / "lib").glob("python*/site-packages"))
+    (site_dir / "test_build_tools.pth").write_text("\n".join(sorted(build_paths)) + "\n")
+    return str(directory / "bin/python"), site_dir
 
 
 def test_sdist_wheel_and_offline_demo_export(tmp_path):
@@ -52,8 +65,8 @@ def test_sdist_wheel_and_offline_demo_export(tmp_path):
     env["PYTHONNOUSERSITE"] = "1"
     env["DCD_EXPECTED_VERSION"] = version
 
-    def run(arguments, cwd):
-        result = subprocess.run([sys.executable] + arguments, cwd=str(cwd), env=env,
+    def run(arguments, cwd, python=sys.executable):
+        result = subprocess.run([python] + arguments, cwd=str(cwd), env=env,
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
         assert result.returncode == 0, result.stdout
         return result.stdout
@@ -79,7 +92,12 @@ def test_sdist_wheel_and_offline_demo_export(tmp_path):
         assert not any(name.endswith((".pt", ".bag")) for name in distribution.namelist())
         metadata_file = next(name for name in distribution.namelist() if name.endswith(".dist-info/METADATA"))
         metadata = Parser().parsestr(distribution.read(metadata_file).decode("utf-8"))
+        assert metadata["Name"] == "data-collect-dag"
         assert metadata["Version"] == version
+        assert set(metadata["Requires-Python"].split(",")) == {">=3.8", "<3.9"}
+        assert {extra.replace("_", "-") for extra in metadata.get_all("Provides-Extra")} == {"base", "opencv", "yolo", "yolo-arm", "dev", "yolo-dev"}
+        entry_points = next(name for name in distribution.namelist() if name.endswith(".dist-info/entry_points.txt"))
+        assert "data_collect_dag = data_collect_dag.cli:main" in distribution.read(entry_points).decode("utf-8")
         requirements = [Requirement(line) for line in metadata.get_all("Requires-Dist") or []]
         base = {req.name.lower() for req in requirements if req.marker is None}
         assert base == {"numpy", "pyyaml", "pillow", "rospkg"}
@@ -97,8 +115,12 @@ def test_sdist_wheel_and_offline_demo_export(tmp_path):
         with ZipFile(io.BytesIO(distribution.read("data_collect_dag/_demo.zip"))) as bundle:
             assert {name: bundle.read(name) for name in bundle.namelist()} == expected
 
-    editable = tmp_path / "editable"
-    run(["-m", "pip", "install", "--no-deps", "--no-build-isolation", "--target", str(editable), "--editable", str(source)], tmp_path)
+    def create_venv(command):
+        return run(command[1:], tmp_path, python=command[0])
+
+    editable_python, editable = _isolated_python(tmp_path / "editable-venv", create_venv)
+    run(["-m", "pip", "install", "--no-deps", "--no-build-isolation", "--editable", str(source)],
+        tmp_path, python=editable_python)
     # A template added after installation proves that editable exports read live files.
     (demo / "live.yaml").write_text("editable_revision: live\n")
     env["DCD_EDITABLE"] = str(editable)
@@ -120,7 +142,7 @@ export_config_templates(Path("editable-export"))
 assert Path("editable-export/live.yaml").read_text() == "editable_revision: live\n"
 export_config_templates(Path("editable-sa14"), car_id="SA14")
 assert {path.name for path in Path("editable-sa14/calibration").iterdir()} == {"sa14"}
-'''], tmp_path)
+'''], tmp_path, python=editable_python)
     installed = tmp_path / "installed"
     run(["-m", "pip", "install", "--no-deps", "--target", str(installed), str(wheel)], tmp_path)
     # Remove the build checkouts so the export cannot fall back to repository files.
@@ -191,14 +213,14 @@ assert not blocked.intersection(sys.modules)
 def test_vcs_install_replaces_lower_version_without_upgrade_flag(tmp_path):
     source = tmp_path / "source"
     _copy_source(source)
-    project = source / "pyproject.toml"
+    project = source / "setup.cfg"
     package = source / "src/data_collect_dag/__init__.py"
     current_project = project.read_text(encoding="utf-8")
     current_package = package.read_text(encoding="utf-8")
     version = _project_version()
     # Simulate an older release without depending on historical Git objects.
-    project.write_text(current_project.replace('version = "{}"'.format(version), 'version = "0.2.0"'), encoding="utf-8")
-    package.write_text(current_package.replace('__version__ = "{}"'.format(version), '__version__ = "0.2.0"'), encoding="utf-8")
+    project.write_text(current_project.replace('version = {}'.format(version), 'version = 0.4.0'), encoding="utf-8")
+    package.write_text(current_package.replace('__version__ = "{}"'.format(version), '__version__ = "0.4.0"'), encoding="utf-8")
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     env["PIP_NO_INDEX"] = "1"
@@ -217,22 +239,30 @@ def test_vcs_install_replaces_lower_version_without_upgrade_flag(tmp_path):
 
     run(["git", "init", "--quiet", str(source)])
     commit("older release")
-    isolated = tmp_path / "venv"
-    # Use the test environment's build tools/pip, but install the project only
-    # inside this disposable venv, never into the developer's environment.
-    run([sys.executable, "-m", "venv", "--system-site-packages", "--without-pip", str(isolated)])
-    # A nested --system-site-packages venv inherits the base interpreter's
-    # packages, not build tools installed in the invoking test venv. Make the
-    # caller's build tools available without exposing the source checkout.
-    import setuptools
-    import wheel
-    build_paths = {str(Path(module.__file__).resolve().parent.parent) for module in (setuptools, wheel)}
-    site_dir = next((isolated / "lib").glob("python*/site-packages"))
-    (site_dir / "test_build_tools.pth").write_text("\n".join(sorted(build_paths)) + "\n")
-    python = str(isolated / "bin/python")
+    python, _ = _isolated_python(tmp_path / "venv", run)
+    # Metadata-only fixtures satisfy the resolver without downloading packages.
+    # Offline CLI checks still use real runtime modules from system site-packages.
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    for name, release in [("numpy", "1.23.5"), ("PyYAML", "5.3.1"), ("Pillow", "9.3.0"),
+                          ("rospkg", "1.6.0"), ("UNKNOWN", "0.0.0")]:
+        wheel_path = fixtures / "{}-{}-py3-none-any.whl".format(name, release)
+        info = "{}-{}.dist-info".format(name, release)
+        with ZipFile(wheel_path, "w") as bundle:
+            bundle.writestr(info + "/METADATA", "Metadata-Version: 2.1\nName: {}\nVersion: {}\n".format(name, release))
+            bundle.writestr(info + "/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+            bundle.writestr(info + "/RECORD", "")
+        run([python, "-m", "pip", "install", "--no-deps", str(wheel_path)])
+    snapshot = r'''
+from importlib import metadata
+print(sorted((d.metadata["Name"], d.version, str(d.locate_file("")), d.read_text("METADATA"))
+             for d in metadata.distributions() if d.metadata["Name"] != "data-collect-dag"))
+'''
+    before = run([python, "-c", snapshot])
     requirement = "git+" + source.as_uri()
-    install = [python, "-m", "pip", "install", "--no-deps", "--no-build-isolation", requirement]
-    run(install)
+    install = [python, "-m", "pip", "install", "--no-build-isolation", requirement]
+    # Seed the old release locally even if it also exists in inherited packages.
+    run(install + ["--ignore-installed", "--no-deps"])
     verify = r'''
 import sys
 from pathlib import Path
@@ -241,7 +271,7 @@ import data_collect_dag
 assert data_collect_dag.__version__ == metadata.version("data-collect-dag") == sys.argv[1]
 assert str(Path(data_collect_dag.__file__).resolve()).startswith(str(Path(sys.prefix).resolve()) + "/")
 '''
-    run([python, "-c", verify, "0.2.0"])
+    run([python, "-c", verify, "0.4.0"])
     project.write_text(current_project, encoding="utf-8")
     package.write_text(current_package, encoding="utf-8")
     commit("current release")
@@ -249,6 +279,7 @@ assert str(Path(data_collect_dag.__file__).resolve()).startswith(str(Path(sys.pr
     # --upgrade nor --force-reinstall. Dependencies stay untouched.
     run(install)
     run([python, "-c", verify, version])
+    assert run([python, "-c", snapshot]) == before
     help_text = run([python, "-m", "data_collect_dag", "--help"])
     assert "inspect" in help_text
     assert "--car-id CAR_ID" in run([python, "-m", "data_collect_dag", "init", "--help"])

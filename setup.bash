@@ -54,11 +54,11 @@ pick_arm_wheel() {
 case "$MODE" in
     base)
         echo "Installing the base DataCollectDAG runtime (no inference packages)..."
-        python -m pip install -e .
+        python -m pip install --no-build-isolation -e .
         ;;
     yolo|dev|yolo-dev)
         echo "Installing DataCollectDAG in $MODE mode..."
-        python -m pip install -e ".[$MODE]"
+        python -m pip install --no-build-isolation -e ".[$MODE]"
         ;;
     yolo-arm)
         echo "Installing ARM YOLO with Jetson PyTorch wheels from $WHEEL_DIR..."
@@ -95,7 +95,7 @@ PY
         python -m pip uninstall -y torch torchvision
         # Install only the local wheels before resolving any YOLO dependencies.
         python -m pip install --no-deps "$torch_wheel" "$torchvision_wheel"
-        python -m pip install --constraint "$constraint_file" \
+        python -m pip install --no-build-isolation --constraint "$constraint_file" \
             --no-binary=psutil --find-links "$WHEEL_DIR" -e ".[yolo-arm]"
         ;;
     *)

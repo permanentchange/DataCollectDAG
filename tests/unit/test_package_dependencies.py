@@ -2,9 +2,9 @@
 
 Uses stdlib importlib.metadata and does not import optional runtime packages.
 """
+from configparser import ConfigParser
 from importlib import metadata
 from pathlib import Path
-import re
 
 from packaging.requirements import Requirement
 import pytest
@@ -12,9 +12,17 @@ import pytest
 from data_collect_dag import __version__
 
 
+def _matches_extra(requirement, extra):
+    # Legacy setuptools spells extra names with underscores in wheel metadata.
+    return any(requirement.marker.evaluate({"extra": alias})
+               for alias in (extra, extra.replace("-", "_")))
+
+
 def test_source_version_matches_project_metadata():
-    project = (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
-    declared = re.search(r'^version\s*=\s*"([^"]+)"', project, re.MULTILINE).group(1)
+    project = (Path(__file__).resolve().parents[2] / "setup.cfg").read_text(encoding="utf-8")
+    config = ConfigParser()
+    config.read_string(project)
+    declared = config["metadata"]["version"]
     assert __version__ == declared
 
 
@@ -26,7 +34,7 @@ def test_runtime_dependencies_are_declared():
 
 def test_optional_dependency_groups_are_declared():
     dist = metadata.distribution("data-collect-dag")
-    extras = set(dist.metadata.get_all("Provides-Extra") or [])
+    extras = {extra.replace("_", "-") for extra in dist.metadata.get_all("Provides-Extra") or []}
     assert extras == {"base", "opencv", "yolo", "yolo-arm", "dev", "yolo-dev"}
 
 
@@ -43,7 +51,7 @@ def test_installation_mode_dependencies(mode, expected):
     base = {requirement.name for requirement in requirements if requirement.marker is None}
     selected = {
         requirement.name for requirement in requirements
-        if requirement.marker is None or requirement.marker.evaluate({"extra": mode})
+        if requirement.marker is None or _matches_extra(requirement, mode)
     }
     assert selected - base == expected
 
@@ -54,7 +62,7 @@ def test_arm_psutil_dependency_is_pinned():
     assert len(psutil) == 1
     assert str(psutil[0].specifier) == "==6.1.1"
     assert psutil[0].marker is not None
-    assert psutil[0].marker.evaluate({"extra": "yolo-arm"})
+    assert _matches_extra(psutil[0], "yolo-arm")
 
 
 def test_opencv_version_range_and_optional_groups():

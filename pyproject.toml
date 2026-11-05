@@ -1,35 +1,3 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=45.2.0", "wheel>=0.34.2"]
 build-backend = "setuptools.build_meta"
-
-[project]
-name = "data-collect-dag"
-version = "0.5.0"
-description = "ROS1-oriented data collection DAG demo runtime"
-readme = "README.md"
-requires-python = ">=3.8,<3.9"
-dependencies = [
-    "numpy>=1.17,<2",
-    "PyYAML>=5.3,<7",
-    "Pillow>=7,<11",
-    "rospkg>=1.4,<2",
-]
-
-[project.optional-dependencies]
-base = []
-opencv = ["opencv-python>=4.2,<4.12"]
-yolo = ["ultralytics>=8.4,<9", "opencv-python>=4.2,<4.12"]
-# Jetson torch/torchvision wheels must be supplied explicitly; the installer
-# constrains these dependencies to local files before resolving Ultralytics.
-yolo-arm = ["ultralytics>=8.4,<9", "opencv-python>=4.2,<4.12", "psutil==6.1.1"]
-dev = ["pytest>=7,<9"]
-yolo-dev = ["ultralytics>=8.4,<9", "opencv-python>=4.2,<4.12", "pytest>=7,<9"]
-
-[project.scripts]
-data_collect_dag = "data_collect_dag.cli:main"
-
-[tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]

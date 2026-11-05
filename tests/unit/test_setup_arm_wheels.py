@@ -76,7 +76,7 @@ def test_base_install_does_not_touch_inference_packages(tmp_path, monkeypatch, m
     result = _run(tmp_path, mode)
 
     assert result.returncode == 0, result.stderr
-    assert _calls(log) == [["-m", "pip", "install", "-e", "."]]
+    assert _calls(log) == [["-m", "pip", "install", "--no-build-isolation", "-e", "."]]
 
 
 @pytest.mark.parametrize("mode", ["yolo", "dev", "yolo-dev"])
@@ -85,7 +85,7 @@ def test_optional_installation_modes(tmp_path, monkeypatch, mode):
     result = _run(tmp_path, mode)
 
     assert result.returncode == 0, result.stderr
-    assert _calls(log) == [["-m", "pip", "install", "-e", ".[{}]".format(mode)]]
+    assert _calls(log) == [["-m", "pip", "install", "--no-build-isolation", "-e", ".[{}]".format(mode)]]
 
 
 @pytest.mark.parametrize("mode", [
@@ -140,9 +140,9 @@ def test_arm_installs_local_wheels_before_yolo_with_file_constraints(tmp_path, m
     assert commands[1] == [
         "-m", "pip", "install", "--no-deps", str(wheels / TORCH), str(wheels / TORCHVISION),
     ]
-    constraint_file = commands[2][4]
+    constraint_file = commands[2][5]
     assert commands[2] == [
-        "-m", "pip", "install", "--constraint", constraint_file,
+        "-m", "pip", "install", "--no-build-isolation", "--constraint", constraint_file,
         "--no-binary=psutil", "--find-links", str(wheels), "-e", ".[yolo-arm]",
     ]
     assert log.with_suffix(".constraints").read_text().splitlines() == [

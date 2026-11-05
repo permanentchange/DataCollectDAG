@@ -40,8 +40,8 @@ def test_local_markdown_links_exist_and_code_fences_are_balanced():
 
 
 def test_python_distribution_uses_maintained_readme():
-    metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'readme = "README.md"' in metadata
+    metadata = (ROOT / "setup.cfg").read_text(encoding="utf-8")
+    assert 'long_description = file: README.md' in metadata
 
 
 def test_documentation_has_no_removed_examples_or_historical_calibration_names():

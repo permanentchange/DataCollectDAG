@@ -28,13 +28,7 @@ python3 -c "from importlib.metadata import version; print('setuptools:', version
 
 An existing system `cv2` does not need a matching `opencv-python` entry in `pip3 list`. OpenCV 4.2 supports the runtime's image conversion, fisheye undistortion and projection interfaces. If `cv2` is missing, install the system package (on Ubuntu, `sudo apt-get install python3-opencv`) or use the explicit `opencv` extra below.
 
-Source builds require `setuptools>=68` and `wheel`. If either is missing or too old, prepare them once:
-
-```bash
-pip3 install --index-url https://pypi.tuna.tsinghua.edu.cn/simple 'setuptools>=68' wheel
-```
-
-The installation examples below use `--no-build-isolation` to reuse those tools. Without that option, pip prepares a temporary isolated build environment and may download build dependencies even when the active environment has them. Compatible installed runtime dependencies are reused; missing or incompatible dependencies are resolved normally. Git must be installed for remote installation.
+Source builds support `setuptools>=45.2.0` and `wheel>=0.34.2`, including Ubuntu 20.04's existing build tools with pip 20.0.2. Package metadata is maintained in `setup.cfg`. The installation examples and `setup.bash` use `--no-build-isolation` to reuse the active environment's build tools without upgrading them. Without that option, pip prepares a temporary isolated build environment and may download build dependencies. Compatible installed runtime dependencies are reused; missing or incompatible dependencies are resolved normally. Git must be installed for remote installation.
 
 ### Install directly from a remote repository
 
@@ -87,12 +81,12 @@ pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
 
 For GitHub, replace the URL with `git+https://github.com/permanentchange/DataCollectDAG.git@main`. Pip uses project versions for VCS upgrades; a different commit with the same version is not a new release. Use a tag or commit instead of a branch name when a fixed revision is required. Remote installation uses the version published to that repository, including its dependency declarations.
 
-To install the fixed v0.5.0 release after its tag has been pushed to Gitee:
+To install the fixed v0.5.1 release after its tag has been pushed to Gitee:
 
 ```bash
 pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@v0.5.0'
+  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@v0.5.1'
 ```
 
 If code changes have been pushed without changing the project version, force a reinstall. When the dependency requirements are unchanged and already satisfied, use `--no-deps` to reinstall only this project:
