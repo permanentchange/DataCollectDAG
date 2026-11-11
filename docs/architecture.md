@@ -61,6 +61,8 @@
 
 `RosAdapter` 订阅所有配置的 `ros.topics`。活动 session 绑定后，帧进入 `SessionInputCache`；暂停及停止状态不接收新帧。`main_source` 消息触发主帧事件，按配置延时处理。队列满时尝试丢弃最旧事件；`sample_workers` 消费主帧，`node_workers` 执行 DAG 节点。
 
+缓存的 `max_age_sec` 以接收时间计算，仅在该 topic 收到新帧时清理旧缓存；查询本身不按接收时间淘汰帧。时间同步、车速筛选和运动补偿使用消息源时间戳，因此相关传感器需要一致的时间基准。
+
 `DagExecutor` 只在前驱全部返回 `OK` 后提交后继。非 `OK` 结果停止该样本后续调度并请求取消；已提交任务等待返回。节点异常转为 `FAIL_SAMPLE`。数据、元信息和节点计时通过 `SampleContext` 传递。
 
 ## 2. YAML 配置
@@ -203,13 +205,17 @@ pipelines:
 
 `xtreme1_structured_save.config.include_distortion_params` 是布尔值，默认 `false`；`fps_undist` 和 `fps_undist_nomotion` 设置为 `true`，在每个相机 JSON 的 `items[i]` 中增加与 `camera_internal` 同级的 `dist_model` 和 `dist_coeffs`。数值取自对应源标定，系数不随分辨率缩放；内参根据保存分辨率缩放。节点初始化时验证畸变参数；启用该模式但存在对应相机的去畸变元数据时拒绝保存该样本，避免参数与图像不匹配。`include_distortion_params: false` 时不写入这些字段。
 
-`yolo_gate` 的 `config` 必须包含 `model_path`、`class_names`、`confidence_thresholds`、`min_area_ratios`、`predict_conf`，同时将图像输入映射为 `inputs.image`。三个列表非空、长度一致并按下标对齐，类别名不可重复，阈值为 0 到 1 的有限数值；`predict_conf` 不得大于最小的类别阈值；`failure_policy` 只接受 `skip_sample`。`device: cpu` 为默认设置；`gpu`、`cuda` 映射到设备 `0`，`gpu:N` 映射到 `N`；`device: auto` 对非 `.engine` 模型优先检查 CUDA，并在推理异常时重试 CPU。明确指定 CUDA 且不可用则初始化失败；TensorRT `.engine` 不支持自动切换到 CPU。
+`yolo_gate` 的 `config` 必须包含 `model_path`、`class_names`、`confidence_thresholds`、`min_area_ratios`、`predict_conf`，同时将图像输入映射为 `inputs.image`。三个列表非空、长度一致并按下标对齐，类别名不可重复，阈值为 0 到 1 的有限数值；`predict_conf` 不得大于最小的类别阈值；`failure_policy` 只接受 `skip_sample`。`device: cpu` 为默认设置；`gpu`、`cuda` 映射到设备 `0`，`gpu:N` 映射到 `N`；`device: auto` 对非 `.engine` 模型优先检查 CUDA；仅在自动选择了 CUDA 且推理失败时，才改用 CPU 重试当前及后续样本。明确指定 CUDA 且不可用则初始化失败；TensorRT `.engine` 不支持自动切换到 CPU。
 
 `ultralytics` 和 `torch` 在 YOLO 初始化的相应路径中导入；非 YOLO pipeline 使用基础依赖。ONNX 模型也由 `yolo_gate` 通过 Ultralytics 加载。
 
 ## 4. 数据与文件
 
-`ros_messages.py` 将 ROS 消息包装为图像、点云、定位、IMU、里程计、车辆状态或文本 frame。图像解码和点云解析可以在处理节点使用数据时延后进行。标定 JSON 通过 `app.py::load_calibration` 读取，使用顶层 `images` 和 `pointclouds`；点云变换只选取包含 `sensor2base` 的条目。
+`ros_messages.py` 将 ROS 消息包装为图像、点云、定位、IMU、里程计、车辆状态或文本 frame。图像解码和点云解析可以在处理节点使用数据时延后进行。
+
+`Image` 解码支持 `bgr8`、`rgb8`、`bgra8`、`rgba8`、`mono8` 和 `bayer_rggb8`；`PointCloud2` 要求 `x/y/z` 字段，`intensity` 和点级 `timestamp` 可选。点级时间戳仅识别秒或纳秒量级；缺少有效点级时间戳时，默认 `required: true` 的运动补偿节点会跳过样本。
+
+标定 JSON 通过 `app.py::load_calibration` 读取，使用顶层 `images` 和 `pointclouds`；点云变换只选取包含 `sensor2base` 的条目。
 
 采集运行时目前只接受相机标定 `dist_model: equidistant`，要求 `dist_coeffs` 含四个有限数值，顺序为 OpenCV fisheye 的 `[k1, k2, k3, k4]`。加载标定时会校验 `images` 中的每一项，即使选中的 pipeline 不去畸变也要通过此校验。`image_undistort` 使用 OpenCV fisheye 映射；输入与标定宽高比一致时缩放内参，宽高比不一致时跳过该样本。`write_debug_artifacts: true` 将诊断图像和参数写入会话的 `diagnostics/undistort/` 目录，默认值为 `false`。图像处理经 `opencv_compat.py` 按需导入 `cv2`，可复用系统 OpenCV；安装方式见 [README](../README.md#requirements)。
 
@@ -248,7 +254,7 @@ JPEG 质量为 95。ASCII PCD 字段为 `x y z intensity has_intensity`：有效
 
 ROS 安装、Master、自定义消息包、传感器 topic、标定源文件和模型权重由运行环境提供。节点类型使用源码中的固定注册表。
 
-构建后端在 wheel 中生成 `data_collect_dag/_demo.zip`，收录 demo YAML 和 `calibration/` 下的 JSON；源码包通过 `MANIFEST.in` 收录同一组模板。模型权重、ROS bag 和采集输出不打包。`init` 从可编辑 checkout 或安装包资源导出模板；安装及升级不修改已导出的配置。
+构建后端在 wheel 中生成 `data_collect_dag/_demo.zip`，收录 demo YAML 和 `calibration/` 下的 JSON；源码包通过 `MANIFEST.in` 收录同一组模板。模型权重、ROS bag 和采集输出不打包。`init` 会创建 `models/` 目录并将配置中的模型路径改为其中的绝对路径，但不会提供模型权重；运行 `fps_with_yolo` 前需自行放入兼容的 `yolo26m.pt`。`init` 从可编辑 checkout 或安装包资源导出模板；安装及升级不修改已导出的配置。
 
 `tools/` 需要源码 checkout，不属于安装包入口或配置模板。点云、图像等工具共用数值处理与文件读取，查看器把本地 Plotly JavaScript 嵌入 HTML；压缩 PCD 与 YOLO 分别按需加载 Open3D 和 Ultralytics。它们不增加基础安装的推理依赖。共享投影函数保留源点索引，使颜色与像素对应，并根据相机参数选择 pinhole 或 equidistant 投影。
 

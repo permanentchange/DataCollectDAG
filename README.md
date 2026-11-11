@@ -32,7 +32,7 @@ Source builds support `setuptools>=45.2.0` and `wheel>=0.34.2`, including Ubuntu
 
 ### Install directly from a remote repository
 
-No local checkout is needed. The repository's `origin` remote is Gitee; `github` is GitHub. The Gitee examples select `master`; the GitHub examples select `main`. Run either command:
+No local checkout is needed. The repository's `origin` remote is Gitee; `github` is GitHub. Both examples select the `master` branch. Run either command:
 
 ```bash
 # Gitee (origin): primary example for domestic access
@@ -45,7 +45,7 @@ pip3 install --no-build-isolation \
 # GitHub (github): alternative repository
 pip3 install --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'git+https://github.com/permanentchange/DataCollectDAG.git@main'
+  'git+https://github.com/permanentchange/DataCollectDAG.git@master'
 ```
 
 These HTTPS URLs do not require the SSH setup used by the checkout's Git remotes. The [Tsinghua PyPI mirror](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/) supplies Python dependencies; Git source is downloaded directly from the selected repository. `--index-url` selects the mirror explicitly. Pip does not treat `--extra-index-url` as a lower-priority fallback. If a package is unavailable on the mirror, explicitly select another index for that operation.
@@ -79,7 +79,7 @@ pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
   'git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
 ```
 
-For GitHub, replace the URL with `git+https://github.com/permanentchange/DataCollectDAG.git@main`. Pip uses project versions for VCS upgrades; a different commit with the same version is not a new release. Use a tag or commit instead of a branch name when a fixed revision is required. Remote installation uses the version published to that repository, including its dependency declarations.
+For GitHub, replace the URL with `git+https://github.com/permanentchange/DataCollectDAG.git@master`. Pip uses project versions for VCS upgrades; a different commit with the same version is not a new release. Use a tag or commit instead of a branch name when a fixed revision is required. Remote installation uses the version published to that repository, including its dependency declarations.
 
 To install the fixed v0.5.1 release after its tag has been pushed to Gitee:
 
