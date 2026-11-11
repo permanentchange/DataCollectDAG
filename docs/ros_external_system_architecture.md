@@ -154,6 +154,8 @@ rostopic echo /data_collect/status
 
 配置的每个 `ros.topics` 在 adapter 启动时都要能解析成 ROS message class，包括自定义消息包。先安装 ROS Noetic 和对应 catkin package，并正确 `source` ROS 工作空间；ROS master 地址由 `ROS_MASTER_URI` 指定，默认 `http://localhost:11311`，采集启动时的 Master 探测等待约 5 秒。
 
+消息类优先由已安装的 ROS Python 包解析；无法解析时会尝试读取 ROS 包的 `.msg` 文件并动态生成。所有配置的 `ros.topics` 都会在订阅前解析，即使当前 pipeline 未使用某个 topic，其消息定义不可用也会导致程序启动失败。
+
 当 pipeline 同时配置 `topics` 和 `time_delay_ms` 时，每次 session 启动前都会检查这些 topic 是否在指定毫秒内各收到一条新消息。这里的 `topics` 使用 YAML 的 topic key；计数在 ROS 回调开始时更新，预检查不验证消息转换成功、时间戳有效、车速达标或跨传感器同步。超时后本次 session 启动失败，`last_error` 会包含缺失的 topic key。两个字段均省略时跳过检查，只提供一个字段会在静态配置验证时失败。
 
 实例锁获取、YAML 解析、标定加载、Master 连接和 message class 解析发生在状态接口就绪之前；失败时启动进程返回非零，通过终端输出或后台日志诊断。后台父进程的零退出码及 PID 只表示子进程已创建。
