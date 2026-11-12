@@ -32,23 +32,23 @@ Source builds support `setuptools>=45.2.0` and `wheel>=0.34.2`, including Ubuntu
 
 ### Install directly from a remote repository
 
-No local checkout is needed. The repository's `origin` remote is Gitee; `github` is GitHub. Both examples select the `master` branch. Run either command:
+No local checkout is needed. Both examples select the `master` branch. Run either command:
 
 ```bash
-# Gitee (origin): primary example for domestic access
+# Gitee: primary example for domestic access
 pip3 install --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
+  'git+https://gitee.com/jiangsu-zhongke-zhichi_1/DataCollectDAG.git@master'
 ```
 
 ```bash
-# GitHub (github): alternative repository
+# GitHub: alternative repository
 pip3 install --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
   'git+https://github.com/permanentchange/DataCollectDAG.git@master'
 ```
 
-These HTTPS URLs do not require the SSH setup used by the checkout's Git remotes. The [Tsinghua PyPI mirror](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/) supplies Python dependencies; Git source is downloaded directly from the selected repository. `--index-url` selects the mirror explicitly. Pip does not treat `--extra-index-url` as a lower-priority fallback. If a package is unavailable on the mirror, explicitly select another index for that operation.
+These HTTPS URLs do not require SSH keys. The [Tsinghua PyPI mirror](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/) supplies Python dependencies; Git source is downloaded directly from the selected repository. `--index-url` selects the mirror explicitly. Pip does not treat `--extra-index-url` as a lower-priority fallback. If a package is unavailable on the mirror, explicitly select another index for that operation.
 
 Optionally make Tsinghua the default for future pip commands and `setup.bash` installations:
 
@@ -76,25 +76,17 @@ To upgrade from Gitee while retaining compatible dependencies:
 ```bash
 pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
+  'git+https://gitee.com/jiangsu-zhongke-zhichi_1/DataCollectDAG.git@master'
 ```
 
 For GitHub, replace the URL with `git+https://github.com/permanentchange/DataCollectDAG.git@master`. Pip uses project versions for VCS upgrades; a different commit with the same version is not a new release. Use a tag or commit instead of a branch name when a fixed revision is required. Remote installation uses the version published to that repository, including its dependency declarations.
-
-To install the fixed v0.5.1 release after its tag has been pushed to Gitee:
-
-```bash
-pip3 install --upgrade --upgrade-strategy only-if-needed --no-build-isolation \
-  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@v0.5.1'
-```
 
 If code changes have been pushed without changing the project version, force a reinstall. When the dependency requirements are unchanged and already satisfied, use `--no-deps` to reinstall only this project:
 
 ```bash
 pip3 install --force-reinstall --no-deps --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
+  'git+https://gitee.com/jiangsu-zhongke-zhichi_1/DataCollectDAG.git@master'
 ```
 
 If dependency requirements have changed, install the required dependencies as well. Restart running collection processes after updating the package. Exported configurations are updated separately with `init` as described below.
@@ -116,7 +108,7 @@ The pip-only `opencv` extra installs `opencv-python>=4.2,<4.12` for environments
 ```bash
 pip3 install --no-build-isolation \
   --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  'data-collect-dag[opencv] @ git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
+  'data-collect-dag[opencv] @ git+https://gitee.com/jiangsu-zhongke-zhichi_1/DataCollectDAG.git@master'
 ```
 
 Use `[yolo]`, `[dev]` or `[yolo-dev]` in the same remote syntax for those extras. YOLO depends on pip OpenCV through Ultralytics; system OpenCV reuse applies to base and non-YOLO development installations.
@@ -149,7 +141,7 @@ pip3 install --no-build-isolation \
   --no-binary=psutil \
   "$HOME"/wheels/torch-*.whl \
   "$HOME"/wheels/torchvision-*.whl \
-  'data-collect-dag[yolo-arm] @ git+https://gitee.com/xfzhou95/DataCollectDAG.git@master'
+  'data-collect-dag[yolo-arm] @ git+https://gitee.com/jiangsu-zhongke-zhichi_1/DataCollectDAG.git@master'
 ```
 
 Replace the globs with exact paths when multiple builds are present. The wheel paths fix the torch and torchvision sources during dependency resolution. The `[yolo-arm]` extra alone does not scan `~/wheels` or enforce source installation of psutil: `--no-binary=psutil` must be supplied to pip. `--find-links` alone does not guarantee selection of local builds.
