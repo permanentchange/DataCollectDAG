@@ -3,7 +3,7 @@ name: Base Python installation
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [master]
 
 jobs:
   base-without-inference:
