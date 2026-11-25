@@ -49,7 +49,7 @@ def test_raw_pipeline_saves_synced_original_images_and_pointclouds(tmp_path, mon
     adapter = RosAdapter(config.topics, config.ros_node_name, config.control)
     prechecked_topics = []
     def precheck(topic_keys, timeout_ms):
-        assert timeout_ms == 500
+        assert timeout_ms == 600000
         prechecked_topics.extend(topic_keys)
         return []
     monkeypatch.setattr(adapter, "wait_for_topic_messages", precheck)

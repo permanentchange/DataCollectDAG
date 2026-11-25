@@ -42,7 +42,7 @@ def test_fps_undist_nomotion_uses_static_lidar_transforms_and_sensor_prechecks()
     pipeline = config.pipelines["fps_undist_nomotion"]
     assert pipeline.main_source == reference.main_source
     assert pipeline.stop_conditions == reference.stop_conditions
-    assert pipeline.time_delay_ms == reference.time_delay_ms == 500
+    assert pipeline.time_delay_ms == reference.time_delay_ms == 600000
     sensors = {key for key, topic in config.topics.items() if topic.role in {"image", "pointcloud"}}
     assert len(sensors) == 10
     assert len(pipeline.topics) == 11

@@ -13,6 +13,7 @@ from tests.unit.config_cases import STRUCTURE_ERRORS, NODE_ERRORS, GRAPH_ERRORS,
 def test_load_demo_config():
     config = load_app_config(Path("demo/cfg.yaml"))
     assert "fps_undist_nomotion" in config.pipelines
+    assert all(pipeline.time_delay_ms == 600000 for pipeline in config.pipelines.values())
     assert "localization" in config.topics
     assert config.runtime.debug is True
     pipeline = config.pipelines["fps"]

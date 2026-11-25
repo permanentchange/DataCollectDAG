@@ -151,7 +151,7 @@ pipelines:
 
 ### Demo pipeline
 
-`demo/cfg.yaml` 的实际处理和输出如下。所有预检查窗口均为 500 ms；五个保存 pipeline 都以 1 FPS 为目标，先执行车速筛选。保存的图像均编码为 JPEG，原图指未去畸变的图像。
+`demo/cfg.yaml` 的实际处理和输出如下。所有预检查窗口均为 600000 ms（10 分钟）；五个保存 pipeline 都以 1 FPS 为目标，先执行车速筛选。保存的图像均编码为 JPEG，原图指未去畸变的图像。
 
 | Pipeline | 图像 | 点云 | 保存数据集 | 预检查 topic 数 | 活动时长上限 |
 | --- | --- | --- | --- | ---: | ---: |
@@ -164,7 +164,7 @@ pipelines:
 
 `fps_with_yolo` 对同步后的 `front_camera` 执行推理，需要 YOLO extra 和本地模型 `demo/models/yolo26m.pt`；其余 pipeline 不使用推理包。会话完成后程序保持可控制状态，不自动退出。
 
-`fps_undist_nomotion` 保存五路原始图像，以五个 `pointcloud_transform` 节点将雷达点云按静态外参转换到 `base` 后合并，写入 `collect_demo`；不执行图像去畸变或自车运动补偿。它保留 `fps_undist` 的同步、相机顺序和保存参数，预检查包含五路相机、五路雷达与 `/iccp_status`，共 11 路，窗口为 500 ms。定位、IMU、里程计及 NMEA 无需发布消息，但全局 `ros.topics` 引用的消息类型仍需可解析，包括 `vcu_msgs/ICCPStatus`。所有 demo pipeline 均预检查车速 topic；`init` 不按速度过滤，因此停车时仍执行同步。运行中的程序不热加载配置；修改后须重新启动程序，使用导出配置时须单独更新或重新导出该 YAML。
+`fps_undist_nomotion` 保存五路原始图像，以五个 `pointcloud_transform` 节点将雷达点云按静态外参转换到 `base` 后合并，写入 `collect_demo`；不执行图像去畸变或自车运动补偿。它保留 `fps_undist` 的同步、相机顺序和保存参数，预检查包含五路相机、五路雷达与 `/iccp_status`，共 11 路，窗口为 600000 ms（10 分钟）。定位、IMU、里程计及 NMEA 无需发布消息，但全局 `ros.topics` 引用的消息类型仍需可解析，包括 `vcu_msgs/ICCPStatus`。所有 demo pipeline 均预检查车速 topic；`init` 不按速度过滤，因此停车时仍执行同步。运行中的程序不热加载配置；修改后须重新启动程序，使用导出配置时须单独更新或重新导出该 YAML。
 
 ## 3. 内置节点
 
